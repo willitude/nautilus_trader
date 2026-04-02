@@ -23,7 +23,7 @@ use nautilus_model::{
     data::greeks::{
         GreeksData, OptionGreekValues, PortfolioGreeks, black_scholes_greeks, imply_vol_and_greeks,
     },
-    enums::{InstrumentClass, OptionKind, PositionSide, PriceType},
+    enums::{AssetClass, InstrumentClass, OptionKind, PositionSide, PriceType},
     identifiers::{InstrumentId, StrategyId, Symbol, Venue},
     instruments::{Instrument, any::InstrumentAny},
     position::Position,
@@ -357,9 +357,7 @@ impl GreeksCalculator {
             let cache = self.cache.borrow();
             match cache.instrument(&instrument_id) {
                 Some(instrument) => instrument.clone(),
-                None => anyhow::bail!(format!(
-                    "Instrument definition for {instrument_id} not found."
-                )),
+                None => anyhow::bail!("Instrument definition for {instrument_id} not found"),
             }
         };
 
@@ -410,7 +408,7 @@ impl GreeksCalculator {
         }
 
         if let Some(pos) = position {
-            greeks_data.pnl = greeks_data.price - greeks_data.multiplier * pos.avg_px_open;
+            greeks_data.pnl = greeks_data.price - pos.avg_px_open;
         }
 
         Ok(greeks_data)
@@ -733,6 +731,14 @@ impl GreeksCalculator {
 
     fn get_price(&self, instrument_id: &InstrumentId) -> Option<f64> {
         let cache = self.cache.borrow();
+        if cache
+            .instrument(instrument_id)
+            .is_some_and(|instrument| instrument.asset_class() == AssetClass::Index)
+            && let Some(index_price) = cache.index_price(instrument_id)
+        {
+            return Some(index_price.value.as_f64());
+        }
+
         cache
             .price(instrument_id, PriceType::Mid)
             .or_else(|| cache.price(instrument_id, PriceType::Last))
@@ -974,7 +980,7 @@ mod tests {
 
     use chrono::{TimeZone, Utc};
     use nautilus_model::{
-        data::QuoteTick,
+        data::{IndexPriceUpdate, QuoteTick},
         enums::{AssetClass, OptionKind, PositionSide},
         identifiers::{InstrumentId, StrategyId, Symbol, Venue},
         instruments::{Equity, FuturesContract, OptionContract, any::InstrumentAny},
@@ -1777,5 +1783,303 @@ mod tests {
 
         let expected_underlying = 150.0 + (0.0425_f64 * (30.0 / 365.25)).exp() * (8.50 - 3.33);
         assert!((greeks.underlying_price - expected_underlying).abs() < 1e-9);
+    }
+
+    #[rstest]
+    fn test_instrument_greeks_uses_put_call_parity_for_futures_put_side() {
+        let now = Utc.with_ymd_and_hms(2024, 2, 14, 16, 0, 0).unwrap();
+        let expiry = Utc.with_ymd_and_hms(2024, 3, 15, 16, 0, 0).unwrap();
+        let now_ns = UnixNanos::from(now);
+        let expiry_ns = UnixNanos::from(expiry);
+
+        let future = future_with_expiration("ESH4.GLBX", "ESH4", expiry_ns);
+        let call_option = future_option_with_expiration(
+            "ESH4C150.GLBX",
+            "ESH4C150",
+            "ESH4",
+            OptionKind::Call,
+            "150.00",
+            expiry_ns,
+        );
+        let put_option = future_option_with_expiration(
+            "ESH4P150.GLBX",
+            "ESH4P150",
+            "ESH4",
+            OptionKind::Put,
+            "150.00",
+            expiry_ns,
+        );
+
+        let cache = Rc::new(RefCell::new(Cache::new(None, None)));
+        cache
+            .borrow_mut()
+            .add_instrument(InstrumentAny::FuturesContract(future))
+            .unwrap();
+        cache
+            .borrow_mut()
+            .add_instrument(InstrumentAny::OptionContract(call_option.clone()))
+            .unwrap();
+        cache
+            .borrow_mut()
+            .add_instrument(InstrumentAny::OptionContract(put_option.clone()))
+            .unwrap();
+
+        let call_quote = QuoteTick::new(
+            call_option.id(),
+            Price::from("8.50"),
+            Price::from("8.50"),
+            Quantity::from(100),
+            Quantity::from(100),
+            now_ns,
+            now_ns,
+        );
+        let put_quote = QuoteTick::new(
+            put_option.id(),
+            Price::from("3.33"),
+            Price::from("3.33"),
+            Quantity::from(100),
+            Quantity::from(100),
+            now_ns,
+            now_ns,
+        );
+        cache.borrow_mut().add_quote(call_quote).unwrap();
+        cache.borrow_mut().add_quote(put_quote).unwrap();
+
+        let clock = Rc::new(RefCell::new(TestClock::new()));
+        clock.borrow_mut().set_time(now_ns);
+        let calculator = GreeksCalculator::new(cache, clock);
+
+        let greeks = calculator
+            .instrument_greeks(
+                put_option.id(),
+                Some(0.0425),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(now_ns),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let expected_underlying = 150.0 + (0.0425_f64 * (30.0 / 365.25)).exp() * (8.50 - 3.33);
+        assert!((greeks.underlying_price - expected_underlying).abs() < 1e-9);
+    }
+
+    #[rstest]
+    fn test_instrument_greeks_uses_index_price_for_index_underlying() {
+        let now = Utc.with_ymd_and_hms(2024, 2, 14, 16, 0, 0).unwrap();
+        let expiry = Utc.with_ymd_and_hms(2024, 3, 15, 16, 0, 0).unwrap();
+        let now_ns = UnixNanos::from(now);
+        let expiry_ns = UnixNanos::from(expiry);
+
+        let future = future_with_expiration("ESH4.GLBX", "ESH4", expiry_ns);
+        let call_option = future_option_with_expiration(
+            "ESH4C150.GLBX",
+            "ESH4C150",
+            "ESH4",
+            OptionKind::Call,
+            "150.00",
+            expiry_ns,
+        );
+
+        let cache = Rc::new(RefCell::new(Cache::new(None, None)));
+        cache
+            .borrow_mut()
+            .add_instrument(InstrumentAny::FuturesContract(future))
+            .unwrap();
+        cache
+            .borrow_mut()
+            .add_instrument(InstrumentAny::OptionContract(call_option.clone()))
+            .unwrap();
+
+        let call_quote = QuoteTick::new(
+            call_option.id(),
+            Price::from("8.50"),
+            Price::from("8.50"),
+            Quantity::from(100),
+            Quantity::from(100),
+            now_ns,
+            now_ns,
+        );
+        cache.borrow_mut().add_quote(call_quote).unwrap();
+        cache
+            .borrow_mut()
+            .add_index_price(IndexPriceUpdate::new(
+                InstrumentId::from("ESH4.GLBX"),
+                Price::from("157.25"),
+                now_ns,
+                now_ns,
+            ))
+            .unwrap();
+
+        let clock = Rc::new(RefCell::new(TestClock::new()));
+        clock.borrow_mut().set_time(now_ns);
+        let calculator = GreeksCalculator::new(cache, clock);
+
+        let greeks = calculator
+            .instrument_greeks(
+                call_option.id(),
+                Some(0.0425),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(now_ns),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(greeks.underlying_price, 157.25);
+    }
+
+    #[rstest]
+    fn test_instrument_greeks_errors_when_opposite_option_price_missing_for_parity() {
+        let now = Utc.with_ymd_and_hms(2024, 2, 14, 16, 0, 0).unwrap();
+        let expiry = Utc.with_ymd_and_hms(2024, 3, 15, 16, 0, 0).unwrap();
+        let now_ns = UnixNanos::from(now);
+        let expiry_ns = UnixNanos::from(expiry);
+
+        let future = future_with_expiration("ESH4.GLBX", "ESH4", expiry_ns);
+        let call_option = future_option_with_expiration(
+            "ESH4C150.GLBX",
+            "ESH4C150",
+            "ESH4",
+            OptionKind::Call,
+            "150.00",
+            expiry_ns,
+        );
+
+        let cache = Rc::new(RefCell::new(Cache::new(None, None)));
+        cache
+            .borrow_mut()
+            .add_instrument(InstrumentAny::FuturesContract(future))
+            .unwrap();
+        cache
+            .borrow_mut()
+            .add_instrument(InstrumentAny::OptionContract(call_option.clone()))
+            .unwrap();
+
+        let call_quote = QuoteTick::new(
+            call_option.id(),
+            Price::from("8.50"),
+            Price::from("8.50"),
+            Quantity::from(100),
+            Quantity::from(100),
+            now_ns,
+            now_ns,
+        );
+        cache.borrow_mut().add_quote(call_quote).unwrap();
+
+        let clock = Rc::new(RefCell::new(TestClock::new()));
+        clock.borrow_mut().set_time(now_ns);
+        let calculator = GreeksCalculator::new(cache, clock);
+
+        let error = calculator
+            .instrument_greeks(
+                call_option.id(),
+                Some(0.0425),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(now_ns),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "No opposite option price available for parity pricing on ESH4P150.GLBX"
+        );
+    }
+
+    #[rstest]
+    fn test_instrument_greeks_errors_when_parity_symbol_cannot_be_derived() {
+        let now = Utc.with_ymd_and_hms(2024, 2, 14, 16, 0, 0).unwrap();
+        let expiry = Utc.with_ymd_and_hms(2024, 3, 15, 16, 0, 0).unwrap();
+        let now_ns = UnixNanos::from(now);
+        let expiry_ns = UnixNanos::from(expiry);
+
+        let future = future_with_expiration("ESH4.GLBX", "ESH4", expiry_ns);
+        let broken_option = future_option_with_expiration(
+            "ESH4150.GLBX",
+            "ESH4150",
+            "ESH4",
+            OptionKind::Call,
+            "150.00",
+            expiry_ns,
+        );
+
+        let cache = Rc::new(RefCell::new(Cache::new(None, None)));
+        cache
+            .borrow_mut()
+            .add_instrument(InstrumentAny::FuturesContract(future))
+            .unwrap();
+        cache
+            .borrow_mut()
+            .add_instrument(InstrumentAny::OptionContract(broken_option.clone()))
+            .unwrap();
+
+        let broken_quote = QuoteTick::new(
+            broken_option.id(),
+            Price::from("8.50"),
+            Price::from("8.50"),
+            Quantity::from(100),
+            Quantity::from(100),
+            now_ns,
+            now_ns,
+        );
+        cache.borrow_mut().add_quote(broken_quote).unwrap();
+
+        let clock = Rc::new(RefCell::new(TestClock::new()));
+        clock.borrow_mut().set_time(now_ns);
+        let calculator = GreeksCalculator::new(cache, clock);
+
+        let error = calculator
+            .instrument_greeks(
+                broken_option.id(),
+                Some(0.0425),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(now_ns),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Could not derive opposite option symbol for parity pricing on ESH4150.GLBX"
+        );
     }
 }

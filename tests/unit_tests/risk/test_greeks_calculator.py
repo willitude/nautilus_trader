@@ -19,6 +19,7 @@ from math import exp
 
 from nautilus_trader.common.component import TestClock
 from nautilus_trader.common.factories import OrderFactory
+from nautilus_trader.model.data import IndexPriceUpdate
 from nautilus_trader.model.data import QuoteTick
 from nautilus_trader.model.enums import AssetClass
 from nautilus_trader.model.enums import OmsType
@@ -320,6 +321,304 @@ class TestGreeksCalculator:
             f"Underlying price mismatch: {greeks.underlying_price} vs {expected_underlying}"
         )
 
+    def test_instrument_greeks_uses_put_call_parity_for_futures_put_side(self):
+        future_id = InstrumentId(Symbol("ESH4"), Venue("GLBX"))
+        call_id = InstrumentId(Symbol("ESH4C150"), Venue("GLBX"))
+        put_id = InstrumentId(Symbol("ESH4P150"), Venue("GLBX"))
+        expiry_date = datetime(2024, 3, 15, 16, 0, 0, tzinfo=UTC)
+        expiry_ns = int(expiry_date.timestamp() * 1_000_000_000)
+
+        future = FuturesContract(
+            instrument_id=future_id,
+            raw_symbol=Symbol("ESH4"),
+            asset_class=AssetClass.INDEX,
+            exchange="XCME",
+            currency=Currency.from_str("USD"),
+            price_precision=2,
+            price_increment=Price.from_str("0.25"),
+            multiplier=Quantity.from_int(1),
+            lot_size=Quantity.from_int(1),
+            underlying="ESH4",
+            activation_ns=0,
+            expiration_ns=expiry_ns,
+            ts_event=0,
+            ts_init=0,
+        )
+        call_option = OptionContract(
+            instrument_id=call_id,
+            raw_symbol=Symbol("ESH4C150"),
+            asset_class=AssetClass.INDEX,
+            currency=Currency.from_str("USD"),
+            price_precision=2,
+            price_increment=Price.from_str("0.01"),
+            multiplier=Quantity.from_int(1),
+            lot_size=Quantity.from_int(1),
+            underlying="ESH4",
+            option_kind=OptionKind.CALL,
+            activation_ns=0,
+            expiration_ns=expiry_ns,
+            strike_price=Price.from_str("150.00"),
+            ts_event=0,
+            ts_init=0,
+        )
+        put_option = OptionContract(
+            instrument_id=put_id,
+            raw_symbol=Symbol("ESH4P150"),
+            asset_class=AssetClass.INDEX,
+            currency=Currency.from_str("USD"),
+            price_precision=2,
+            price_increment=Price.from_str("0.01"),
+            multiplier=Quantity.from_int(1),
+            lot_size=Quantity.from_int(1),
+            underlying="ESH4",
+            option_kind=OptionKind.PUT,
+            activation_ns=0,
+            expiration_ns=expiry_ns,
+            strike_price=Price.from_str("150.00"),
+            ts_event=0,
+            ts_init=0,
+        )
+
+        self.cache.add_instrument(future)
+        self.cache.add_instrument(call_option)
+        self.cache.add_instrument(put_option)
+
+        call_price = Price.from_str("8.50")
+        put_price = Price.from_str("3.33")
+        self.cache.add_quote_tick(
+            QuoteTick(
+                instrument_id=call_id,
+                bid_price=call_price,
+                ask_price=call_price,
+                bid_size=Quantity.from_int(100),
+                ask_size=Quantity.from_int(100),
+                ts_event=self.clock.timestamp_ns(),
+                ts_init=self.clock.timestamp_ns(),
+            ),
+        )
+        self.cache.add_quote_tick(
+            QuoteTick(
+                instrument_id=put_id,
+                bid_price=put_price,
+                ask_price=put_price,
+                bid_size=Quantity.from_int(100),
+                ask_size=Quantity.from_int(100),
+                ts_event=self.clock.timestamp_ns(),
+                ts_init=self.clock.timestamp_ns(),
+            ),
+        )
+
+        greeks = self.greeks_calculator.instrument_greeks(
+            instrument_id=put_id,
+            flat_interest_rate=0.0425,
+            cache_greeks=False,
+            ts_event=self.clock.timestamp_ns(),
+        )
+
+        expected_underlying = 150.0 + exp(0.0425 * (30 / 365.25)) * (8.50 - 3.33)
+        assert greeks is not None
+        assert abs(greeks.underlying_price - expected_underlying) < 1e-6, (
+            f"Underlying price mismatch: {greeks.underlying_price} vs {expected_underlying}"
+        )
+
+    def test_instrument_greeks_uses_index_price_for_index_underlying(self):
+        future_id = InstrumentId(Symbol("ESH4"), Venue("GLBX"))
+        call_id = InstrumentId(Symbol("ESH4C150"), Venue("GLBX"))
+        expiry_date = datetime(2024, 3, 15, 16, 0, 0, tzinfo=UTC)
+        expiry_ns = int(expiry_date.timestamp() * 1_000_000_000)
+
+        future = FuturesContract(
+            instrument_id=future_id,
+            raw_symbol=Symbol("ESH4"),
+            asset_class=AssetClass.INDEX,
+            exchange="XCME",
+            currency=Currency.from_str("USD"),
+            price_precision=2,
+            price_increment=Price.from_str("0.25"),
+            multiplier=Quantity.from_int(1),
+            lot_size=Quantity.from_int(1),
+            underlying="ESH4",
+            activation_ns=0,
+            expiration_ns=expiry_ns,
+            ts_event=0,
+            ts_init=0,
+        )
+        call_option = OptionContract(
+            instrument_id=call_id,
+            raw_symbol=Symbol("ESH4C150"),
+            asset_class=AssetClass.INDEX,
+            currency=Currency.from_str("USD"),
+            price_precision=2,
+            price_increment=Price.from_str("0.01"),
+            multiplier=Quantity.from_int(1),
+            lot_size=Quantity.from_int(1),
+            underlying="ESH4",
+            option_kind=OptionKind.CALL,
+            activation_ns=0,
+            expiration_ns=expiry_ns,
+            strike_price=Price.from_str("150.00"),
+            ts_event=0,
+            ts_init=0,
+        )
+
+        self.cache.add_instrument(future)
+        self.cache.add_instrument(call_option)
+        self.cache.add_index_price(
+            IndexPriceUpdate(
+                instrument_id=future_id,
+                value=Price.from_str("157.25"),
+                ts_event=self.clock.timestamp_ns(),
+                ts_init=self.clock.timestamp_ns(),
+            ),
+        )
+        self.cache.add_quote_tick(
+            QuoteTick(
+                instrument_id=call_id,
+                bid_price=Price.from_str("8.50"),
+                ask_price=Price.from_str("8.50"),
+                bid_size=Quantity.from_int(100),
+                ask_size=Quantity.from_int(100),
+                ts_event=self.clock.timestamp_ns(),
+                ts_init=self.clock.timestamp_ns(),
+            ),
+        )
+
+        greeks = self.greeks_calculator.instrument_greeks(
+            instrument_id=call_id,
+            flat_interest_rate=0.0425,
+            cache_greeks=False,
+            ts_event=self.clock.timestamp_ns(),
+        )
+
+        assert greeks is not None
+        assert greeks.underlying_price == 157.25
+
+    def test_instrument_greeks_returns_none_when_opposite_option_price_missing_for_parity(self):
+        future_id = InstrumentId(Symbol("ESH4"), Venue("GLBX"))
+        call_id = InstrumentId(Symbol("ESH4C150"), Venue("GLBX"))
+        expiry_date = datetime(2024, 3, 15, 16, 0, 0, tzinfo=UTC)
+        expiry_ns = int(expiry_date.timestamp() * 1_000_000_000)
+
+        future = FuturesContract(
+            instrument_id=future_id,
+            raw_symbol=Symbol("ESH4"),
+            asset_class=AssetClass.INDEX,
+            exchange="XCME",
+            currency=Currency.from_str("USD"),
+            price_precision=2,
+            price_increment=Price.from_str("0.25"),
+            multiplier=Quantity.from_int(1),
+            lot_size=Quantity.from_int(1),
+            underlying="ESH4",
+            activation_ns=0,
+            expiration_ns=expiry_ns,
+            ts_event=0,
+            ts_init=0,
+        )
+        call_option = OptionContract(
+            instrument_id=call_id,
+            raw_symbol=Symbol("ESH4C150"),
+            asset_class=AssetClass.INDEX,
+            currency=Currency.from_str("USD"),
+            price_precision=2,
+            price_increment=Price.from_str("0.01"),
+            multiplier=Quantity.from_int(1),
+            lot_size=Quantity.from_int(1),
+            underlying="ESH4",
+            option_kind=OptionKind.CALL,
+            activation_ns=0,
+            expiration_ns=expiry_ns,
+            strike_price=Price.from_str("150.00"),
+            ts_event=0,
+            ts_init=0,
+        )
+
+        self.cache.add_instrument(future)
+        self.cache.add_instrument(call_option)
+        self.cache.add_quote_tick(
+            QuoteTick(
+                instrument_id=call_id,
+                bid_price=Price.from_str("8.50"),
+                ask_price=Price.from_str("8.50"),
+                bid_size=Quantity.from_int(100),
+                ask_size=Quantity.from_int(100),
+                ts_event=self.clock.timestamp_ns(),
+                ts_init=self.clock.timestamp_ns(),
+            ),
+        )
+
+        greeks = self.greeks_calculator.instrument_greeks(
+            instrument_id=call_id,
+            flat_interest_rate=0.0425,
+            cache_greeks=False,
+            ts_event=self.clock.timestamp_ns(),
+        )
+
+        assert greeks is None
+
+    def test_instrument_greeks_returns_none_when_parity_symbol_cannot_be_derived(self):
+        future_id = InstrumentId(Symbol("ESH4"), Venue("GLBX"))
+        broken_option_id = InstrumentId(Symbol("ESH4150"), Venue("GLBX"))
+        expiry_date = datetime(2024, 3, 15, 16, 0, 0, tzinfo=UTC)
+        expiry_ns = int(expiry_date.timestamp() * 1_000_000_000)
+
+        future = FuturesContract(
+            instrument_id=future_id,
+            raw_symbol=Symbol("ESH4"),
+            asset_class=AssetClass.INDEX,
+            exchange="XCME",
+            currency=Currency.from_str("USD"),
+            price_precision=2,
+            price_increment=Price.from_str("0.25"),
+            multiplier=Quantity.from_int(1),
+            lot_size=Quantity.from_int(1),
+            underlying="ESH4",
+            activation_ns=0,
+            expiration_ns=expiry_ns,
+            ts_event=0,
+            ts_init=0,
+        )
+        broken_option = OptionContract(
+            instrument_id=broken_option_id,
+            raw_symbol=Symbol("ESH4150"),
+            asset_class=AssetClass.INDEX,
+            currency=Currency.from_str("USD"),
+            price_precision=2,
+            price_increment=Price.from_str("0.01"),
+            multiplier=Quantity.from_int(1),
+            lot_size=Quantity.from_int(1),
+            underlying="ESH4",
+            option_kind=OptionKind.CALL,
+            activation_ns=0,
+            expiration_ns=expiry_ns,
+            strike_price=Price.from_str("150.00"),
+            ts_event=0,
+            ts_init=0,
+        )
+
+        self.cache.add_instrument(future)
+        self.cache.add_instrument(broken_option)
+        self.cache.add_quote_tick(
+            QuoteTick(
+                instrument_id=broken_option_id,
+                bid_price=Price.from_str("8.50"),
+                ask_price=Price.from_str("8.50"),
+                bid_size=Quantity.from_int(100),
+                ask_size=Quantity.from_int(100),
+                ts_event=self.clock.timestamp_ns(),
+                ts_init=self.clock.timestamp_ns(),
+            ),
+        )
+
+        greeks = self.greeks_calculator.instrument_greeks(
+            instrument_id=broken_option_id,
+            flat_interest_rate=0.0425,
+            cache_greeks=False,
+            ts_event=self.clock.timestamp_ns(),
+        )
+
+        assert greeks is None
+
     def test_instrument_greeks_update_vol(self):
         # Test update_vol functionality - uses cached vol as initial guess for refinement
         underlying_price = Price.from_str("155.00")
@@ -544,3 +843,53 @@ class TestGreeksCalculator:
         assert portfolio_greeks.theta < 0.0, (
             f"Portfolio theta should be negative for long call: {portfolio_greeks.theta}"
         )
+
+    def test_instrument_greeks_option_pnl_uses_unscaled_open_price(self):
+        underlying_price = Price.from_str("155.00")
+        option_price = Price.from_str("9.00")
+
+        self.cache.add_quote_tick(
+            QuoteTick(
+                instrument_id=self.underlying_id,
+                bid_price=underlying_price,
+                ask_price=underlying_price,
+                bid_size=Quantity.from_int(100),
+                ask_size=Quantity.from_int(100),
+                ts_event=self.clock.timestamp_ns(),
+                ts_init=self.clock.timestamp_ns(),
+            ),
+        )
+        self.cache.add_quote_tick(
+            QuoteTick(
+                instrument_id=self.option_id,
+                bid_price=option_price,
+                ask_price=option_price,
+                bid_size=Quantity.from_int(100),
+                ask_size=Quantity.from_int(100),
+                ts_event=self.clock.timestamp_ns(),
+                ts_init=self.clock.timestamp_ns(),
+            ),
+        )
+
+        order = self.order_factory.market(
+            self.option_id,
+            OrderSide.BUY,
+            Quantity.from_int(1),
+        )
+        fill = TestEventStubs.order_filled(
+            order,
+            instrument=self.option,
+            position_id=PositionId("P-2"),
+            last_px=Price.from_str("8.50"),
+        )
+        position = Position(instrument=self.option, fill=fill)
+
+        greeks = self.greeks_calculator.instrument_greeks(
+            instrument_id=self.option_id,
+            cache_greeks=False,
+            ts_event=self.clock.timestamp_ns(),
+            position=position,
+        )
+
+        assert greeks is not None
+        assert greeks.pnl == greeks.price - position.avg_px_open
