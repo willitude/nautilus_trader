@@ -50,7 +50,7 @@ impl OrderAny {
     /// - The first event is not `OrderInitialized`.
     /// - Any event has an invalid state transition when applied to the order.
     ///
-    #[allow(clippy::missing_panics_doc)] // Guarded by empty check above
+    #[expect(clippy::missing_panics_doc)] // Guarded by empty check above
     pub fn from_events(events: Vec<OrderEventAny>) -> anyhow::Result<Self> {
         if events.is_empty() {
             anyhow::bail!("No order events provided to create OrderAny");
@@ -271,7 +271,7 @@ impl LimitOrderAny {
     ///
     /// # Panics
     ///
-    /// Panics if the MarketToLimit order price is not set.
+    /// Panics if the `MarketToLimit` order price is not set.
     #[must_use]
     pub fn limit_px(&self) -> Price {
         match self {

@@ -15,7 +15,7 @@
 
 //! Python bindings from [PyO3](https://pyo3.rs).
 
-#![allow(
+#![expect(
     clippy::missing_errors_doc,
     reason = "errors documented on underlying Rust methods"
 )]
@@ -90,7 +90,10 @@ pub fn model(_: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<crate::data::trade::TradeTick>()?;
     m.add_class::<crate::data::close::InstrumentClose>()?;
     m.add_class::<crate::data::funding::FundingRateUpdate>()?;
+    m.add_class::<crate::data::greeks::OptionGreekValues>()?;
     m.add_class::<crate::data::greeks::BlackScholesGreeksResult>()?;
+    m.add_class::<crate::data::greeks::GreeksData>()?;
+    m.add_class::<crate::data::greeks::PortfolioGreeks>()?;
     m.add_class::<crate::data::option_chain::OptionGreeks>()?;
     m.add_class::<crate::data::option_chain::OptionChainSlice>()?;
     m.add_class::<crate::data::option_chain::OptionStrikeData>()?;

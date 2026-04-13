@@ -53,7 +53,10 @@ use std::{
 };
 
 use nautilus_core::{
-    correctness::{FAILED, check_in_range_inclusive_f64},
+    correctness::{
+        CorrectnessError, CorrectnessResult, CorrectnessResultExt, FAILED,
+        check_in_range_inclusive_f64,
+    },
     formatting::Separable,
 };
 use rust_decimal::Decimal;
@@ -88,9 +91,9 @@ pub type MoneyRaw = i64;
 ///
 /// # Safety
 ///
-/// This value is computed at compile time from MONEY_MAX * FIXED_SCALAR.
-/// The multiplication is guaranteed not to overflow because MONEY_MAX and FIXED_SCALAR
-/// are chosen such that their product fits within MoneyRaw's range in both
+/// This value is computed at compile time from `MONEY_MAX` * `FIXED_SCALAR`.
+/// The multiplication is guaranteed not to overflow because `MONEY_MAX` and `FIXED_SCALAR`
+/// are chosen such that their product fits within `MoneyRaw`'s range in both
 /// high-precision (i128) and standard-precision (i64) modes.
 #[unsafe(no_mangle)]
 #[allow(unsafe_code)]
@@ -100,9 +103,9 @@ pub static MONEY_RAW_MAX: MoneyRaw = (MONEY_MAX * FIXED_SCALAR) as MoneyRaw;
 ///
 /// # Safety
 ///
-/// This value is computed at compile time from MONEY_MIN * FIXED_SCALAR.
-/// The multiplication is guaranteed not to overflow because MONEY_MIN and FIXED_SCALAR
-/// are chosen such that their product fits within MoneyRaw's range in both
+/// This value is computed at compile time from `MONEY_MIN` * `FIXED_SCALAR`.
+/// The multiplication is guaranteed not to overflow because `MONEY_MIN` and `FIXED_SCALAR`
+/// are chosen such that their product fits within `MoneyRaw`'s range in both
 /// high-precision (i128) and standard-precision (i64) modes.
 #[unsafe(no_mangle)]
 #[allow(unsafe_code)]
@@ -164,12 +167,12 @@ impl Money {
     ///
     /// # Errors
     ///
-    /// Returns an error if `amount` is invalid outside the representable range [MONEY_MIN, MONEY_MAX].
+    /// Returns an error if `amount` is invalid outside the representable range [`MONEY_MIN`, `MONEY_MAX`].
     ///
     /// # Notes
     ///
     /// PyO3 requires a `Result` type for proper error handling and stacktrace printing in Python.
-    pub fn new_checked(amount: f64, currency: Currency) -> anyhow::Result<Self> {
+    pub fn new_checked(amount: f64, currency: Currency) -> CorrectnessResult<Self> {
         // check_in_range_inclusive_f64 already validates that amount is finite
         // (not NaN or infinite) as part of its range validation logic, so no additional
         // infinity checks are needed here.
@@ -178,9 +181,11 @@ impl Money {
         #[cfg(feature = "defi")]
         if currency.precision > MAX_FLOAT_PRECISION {
             // Floats are only reliable up to ~16 decimal digits of precision regardless of feature flags
-            anyhow::bail!(
-                "`currency.precision` exceeded maximum float precision ({MAX_FLOAT_PRECISION}), use `Money::from_wei()` for wei values instead"
-            );
+            return Err(CorrectnessError::PredicateViolation {
+                message: format!(
+                    "`currency.precision` exceeded maximum float precision ({MAX_FLOAT_PRECISION}), use `Money::from_wei()` for wei values instead"
+                ),
+            });
         }
 
         #[cfg(feature = "high-precision")]
@@ -197,8 +202,9 @@ impl Money {
     /// # Panics
     ///
     /// Panics if a correctness check fails. See [`Money::new_checked`] for more details.
+    #[must_use]
     pub fn new(amount: f64, currency: Currency) -> Self {
-        Self::new_checked(amount, currency).expect(FAILED)
+        Self::new_checked(amount, currency).expect_display(FAILED)
     }
 
     /// Creates a new [`Money`] instance from the given `raw` fixed-point value and the specified `currency`.
@@ -213,7 +219,7 @@ impl Money {
             raw >= MONEY_RAW_MIN && raw <= MONEY_RAW_MAX,
             "`raw` value {raw} exceeded bounds [{MONEY_RAW_MIN}, {MONEY_RAW_MAX}] for Money"
         );
-        check_fixed_precision(currency.precision).expect(FAILED);
+        check_fixed_precision(currency.precision).expect_display(FAILED);
 
         // TODO: Enforce spurious bits validation in v2
         // Validate raw value has no spurious bits beyond the precision scale
@@ -237,17 +243,20 @@ impl Money {
     /// Panics if the resulting raw value exceeds [`MONEY_RAW_MAX`] or [`MONEY_RAW_MIN`].
     #[must_use]
     pub fn from_mantissa_exponent(mantissa: i64, exponent: i8, currency: Currency) -> Self {
-        check_fixed_precision(currency.precision).expect(FAILED);
+        check_fixed_precision(currency.precision).expect_display(FAILED);
 
         if mantissa == 0 {
             return Self { raw: 0, currency };
         }
 
         let raw_i128 =
-            mantissa_exponent_to_fixed_i128(mantissa as i128, exponent, currency.precision)
+            mantissa_exponent_to_fixed_i128(i128::from(mantissa), exponent, currency.precision)
                 .expect("Overflow in Money::from_mantissa_exponent");
 
-        #[allow(clippy::useless_conversion)]
+        #[allow(
+            clippy::useless_conversion,
+            reason = "i128 to MoneyRaw is real when not high-precision"
+        )]
         let raw: MoneyRaw = raw_i128
             .try_into()
             .expect("Raw value exceeds MoneyRaw range in Money::from_mantissa_exponent");
@@ -335,7 +344,10 @@ impl Money {
         // to the currency's actual precision for decimal conversion.
         let rescaled_raw = self.raw / MoneyRaw::pow(10, u32::from(precision_diff));
 
-        #[allow(clippy::useless_conversion)]
+        #[allow(
+            clippy::useless_conversion,
+            reason = "i128::from is real when MoneyRaw is i64"
+        )]
         Decimal::from_i128_with_scale(i128::from(rescaled_raw), u32::from(precision))
     }
 
@@ -362,7 +374,10 @@ impl Money {
         let raw_i128 =
             mantissa_exponent_to_fixed_i128(decimal.mantissa(), exponent, currency.precision)?;
 
-        #[allow(clippy::useless_conversion)]
+        #[allow(
+            clippy::useless_conversion,
+            reason = "i128 to MoneyRaw is real when not high-precision"
+        )]
         let raw: MoneyRaw = raw_i128.try_into().map_err(|_| {
             anyhow::anyhow!(
                 "Decimal value exceeds MoneyRaw range [{MONEY_RAW_MIN}, {MONEY_RAW_MAX}]"
@@ -623,16 +638,20 @@ impl<'de> Deserialize<'de> for Money {
 ///
 /// Returns an error if `value` is not positive.
 #[inline(always)]
-pub fn check_positive_money(value: Money, param: &str) -> anyhow::Result<()> {
+pub fn check_positive_money(value: Money, param: &str) -> CorrectnessResult<()> {
     if value.raw <= 0 {
-        anyhow::bail!("invalid `Money` for '{param}' not positive, was {value}");
+        return Err(CorrectnessError::NotPositive {
+            param: param.to_string(),
+            value: value.to_string(),
+            type_name: "`Money`",
+        });
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use nautilus_core::approx_eq;
+    use nautilus_core::{approx_eq, correctness::CorrectnessError};
     use rstest::rstest;
     use rust_decimal_macros::dec;
 
@@ -656,7 +675,7 @@ mod tests {
 
     #[rstest]
     #[case(1010.12, 2, "USD", "Money(1010.12, USD)", "1010.12 USD")] // Normal precision
-    #[case(123.456789, 8, "BTC", "Money(123.45678900, BTC)", "123.45678900 BTC")] // At max normal precision
+    #[case(123.456_789, 8, "BTC", "Money(123.45678900, BTC)", "123.45678900 BTC")] // At max normal precision
     fn test_formatting_normal_precision(
         #[case] value: f64,
         #[case] precision: u8,
@@ -724,11 +743,11 @@ mod tests {
     }
 
     #[rstest]
-    #[should_panic]
+    #[should_panic(expected = "Currency mismatch")]
     fn test_money_different_currency_addition() {
         let usd = Money::new(1000.0, Currency::USD());
         let btc = Money::new(1.0, Currency::BTC());
-        let _result = usd + btc; // This should panic since currencies are different
+        let _ = usd + btc; // This should panic since currencies are different
     }
 
     #[rstest] // Test does not panic rather than exact value
@@ -741,6 +760,20 @@ mod tests {
     fn test_with_minimum_value() {
         let money = Money::new_checked(MONEY_MIN, Currency::USD());
         assert!(money.is_ok());
+    }
+
+    #[rstest]
+    fn test_new_checked_returns_typed_error_with_stable_display() {
+        let error = Money::new_checked(MONEY_MAX + 1.0, Currency::USD()).unwrap_err();
+
+        assert!(matches!(error, CorrectnessError::OutOfRange { .. }));
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "invalid f64 for 'amount' not in range [{MONEY_MIN}, {MONEY_MAX}], was {}",
+                MONEY_MAX + 1.0
+            )
+        );
     }
 
     #[rstest]
@@ -878,7 +911,7 @@ mod tests {
     #[case("0x00 USD")] // <-- Invalid float
     #[case("0 US")] // <-- Invalid currency
     #[case("0 USD USD")] // <-- Too many parts
-    #[should_panic]
+    #[should_panic(expected = "Condition failed")]
     fn test_from_str_invalid_input(#[case] input: &str) {
         let _ = Money::from(input);
     }
@@ -944,8 +977,8 @@ mod tests {
         assert!(approx_eq!(f64, money.as_f64(), 123.45, epsilon = 1e-10));
 
         // Verify raw value is exact for USD (2 decimal places)
-        let expected_raw = 12345 * 10_i64.pow((FIXED_PRECISION - 2) as u32);
-        assert_eq!(money.raw, expected_raw as MoneyRaw);
+        let expected_raw = 12345 * 10_i64.pow(u32::from(FIXED_PRECISION - 2));
+        assert_eq!(money.raw, MoneyRaw::from(expected_raw));
     }
 
     #[rstest]
@@ -1043,7 +1076,7 @@ mod tests {
     }
 
     #[rstest]
-    #[should_panic]
+    #[should_panic(expected = "Overflow")]
     fn test_from_mantissa_exponent_overflow_panics() {
         let _ = Money::from_mantissa_exponent(i64::MAX, 9, Currency::USD());
     }
@@ -1071,6 +1104,7 @@ mod tests {
     #[case(42.0, true, "positive value")]
     #[case(0.0, false, "zero value")]
     #[case( -13.5,  false, "negative value")]
+    #[allow(clippy::used_underscore_binding)]
     fn test_check_positive_money(
         #[case] amount: f64,
         #[case] should_succeed: bool,
@@ -1090,6 +1124,24 @@ mod tests {
                 "error message should mention positivity; got: {msg:?}"
             );
         }
+    }
+
+    #[rstest]
+    fn test_check_positive_money_returns_typed_error_with_stable_display() {
+        let error = check_positive_money(Money::new(0.0, Currency::USD()), "money").unwrap_err();
+
+        assert_eq!(
+            error,
+            CorrectnessError::NotPositive {
+                param: "money".to_string(),
+                value: "0.00 USD".to_string(),
+                type_name: "`Money`",
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "invalid `Money` for 'money' not positive, was 0.00 USD"
+        );
     }
 }
 
@@ -1148,7 +1200,7 @@ mod property_tests {
                 let precision_epsilon = if currency.precision == 0 {
                     1.0
                 } else {
-                    let currency_epsilon = 10.0_f64.powi(-(currency.precision as i32));
+                    let currency_epsilon = 10.0_f64.powi(-i32::from(currency.precision));
                     let magnitude_epsilon = amount.abs() * 1e-10;
                     currency_epsilon.max(magnitude_epsilon)
                 };

@@ -28,6 +28,7 @@ from nautilus_trader.config import ActorConfig
 from nautilus_trader.config import InstrumentProviderConfig
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.config import TradingNodeConfig
+from nautilus_trader.core.nautilus_pyo3 import OKXEnvironment
 from nautilus_trader.core.nautilus_pyo3 import OKXInstrumentType
 from nautilus_trader.live.node import TradingNode
 from nautilus_trader.model.identifiers import ClientId
@@ -55,6 +56,7 @@ class OptionGreeksTester(Actor):
         instruments = self.cache.instruments()
 
         call_options = []
+
         for inst in instruments:
             symbol = str(inst.id.symbol)
             if not symbol.startswith(f"{self._underlying}-"):
@@ -73,6 +75,7 @@ class OptionGreeksTester(Actor):
         to_subscribe = call_options[: self._max_subscriptions]
 
         client_id = ClientId(OKX)
+
         for inst in to_subscribe:
             self.log.info(f"Subscribing to greeks: {inst.id}")
             self.subscribe_option_greeks(inst.id, client_id=client_id)
@@ -104,9 +107,7 @@ config_node = TradingNodeConfig(
     ),
     data_clients={
         OKX: OKXDataClientConfig(
-            api_key=None,  # 'OKX_API_KEY' env var
-            api_secret=None,  # 'OKX_API_SECRET' env var
-            api_passphrase=None,  # 'OKX_API_PASSPHRASE' env var
+            environment=OKXEnvironment.DEMO,
             instrument_provider=InstrumentProviderConfig(load_all=True),
             instrument_types=(OKXInstrumentType.OPTION,),
             instrument_families=("BTC-USD",),

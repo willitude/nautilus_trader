@@ -44,21 +44,18 @@ fn data_to_pyobject(py: Python<'_>, item: Data) -> PyResult<Py<PyAny>> {
 }
 
 /// A catalog for writing data to Parquet files.
-#[cfg_attr(
-    feature = "python",
-    pyo3::pyclass(module = "nautilus_trader.core.nautilus_pyo3.persistence")
+#[pyclass(
+    name = "ParquetDataCatalog",
+    module = "nautilus_trader.core.nautilus_pyo3.persistence"
 )]
-#[cfg_attr(
-    feature = "python",
-    pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.persistence")
-)]
-pub struct ParquetDataCatalogV2 {
+#[pyo3_stub_gen::derive::gen_stub_pyclass(module = "nautilus_trader.persistence")]
+pub struct PyParquetDataCatalog {
     inner: ParquetDataCatalog,
 }
 
 #[pymethods]
 #[pyo3_stub_gen::derive::gen_stub_pymethods]
-impl ParquetDataCatalogV2 {
+impl PyParquetDataCatalog {
     /// Create a new `ParquetCatalog` with the given base path and optional parameters.
     ///
     /// # Parameters
@@ -367,7 +364,7 @@ impl ParquetDataCatalogV2 {
     ///
     /// Returns a list of instrument objects (e.g. CurrencyPair, Equity).
     #[pyo3(signature = (instrument_ids=None, start=None, end=None))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn instruments(
         &self,
         instrument_ids: Option<Vec<String>>,
@@ -399,7 +396,7 @@ impl ParquetDataCatalogV2 {
     /// - `start`: Start timestamp (nanoseconds since Unix epoch)
     /// - `end`: End timestamp (nanoseconds since Unix epoch)
     #[pyo3(signature = (data_cls, instrument_id=None, *, start, end))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn extend_file_name(
         &self,
         data_cls: &str,
@@ -452,7 +449,7 @@ impl ParquetDataCatalogV2 {
     /// - `ensure_contiguous_files`: Optional flag to ensure files are contiguous
     /// - `deduplicate`: Optional flag to deduplicate rows when combining files
     #[pyo3(signature = (type_name, instrument_id=None, start=None, end=None, ensure_contiguous_files=None, deduplicate=None))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn consolidate_data(
         &self,
         type_name: &str,
@@ -532,7 +529,7 @@ impl ParquetDataCatalogV2 {
     /// - `end`: Optional end timestamp for consolidation range (nanoseconds since Unix epoch)
     /// - `ensure_contiguous_files`: Optional flag to control file naming strategy
     #[pyo3(signature = (type_name, identifier=None, period_nanos=None, start=None, end=None, ensure_contiguous_files=None))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn consolidate_data_by_period(
         &mut self,
         type_name: &str,
@@ -572,7 +569,7 @@ impl ParquetDataCatalogV2 {
     /// - `data_cls`: The data class name
     /// - `instrument_id`: Optional instrument ID filter
     #[pyo3(signature = (data_cls, instrument_id=None))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn reset_data_file_names(
         &self,
         data_cls: &str,
@@ -637,7 +634,7 @@ impl ParquetDataCatalogV2 {
     /// - The method ensures data integrity by using atomic operations where possible
     /// - Empty directories are not automatically removed after deletion
     #[pyo3(signature = (type_name, instrument_id=None, start=None, end=None))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn delete_data_range(
         &mut self,
         type_name: &str,
@@ -756,7 +753,7 @@ impl ParquetDataCatalogV2 {
     ///
     /// Returns a list of (start, end) timestamp tuples representing missing intervals.
     #[pyo3(signature = (start, end, data_cls, instrument_id=None))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn get_missing_intervals_for_request(
         &self,
         start: u64,
@@ -780,7 +777,7 @@ impl ParquetDataCatalogV2 {
     ///
     /// Returns the first timestamp as nanoseconds since Unix epoch, or None if no data exists.
     #[pyo3(signature = (data_cls, instrument_id=None))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn query_first_timestamp(
         &self,
         data_cls: &str,
@@ -802,7 +799,7 @@ impl ParquetDataCatalogV2 {
     ///
     /// Returns the last timestamp as nanoseconds since Unix epoch, or None if no data exists.
     #[pyo3(signature = (data_cls, instrument_id=None))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn query_last_timestamp(
         &self,
         data_cls: &str,
@@ -824,7 +821,7 @@ impl ParquetDataCatalogV2 {
     ///
     /// Returns a list of (start, end) timestamp tuples representing covered intervals.
     #[pyo3(signature = (data_cls, instrument_id=None))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn get_intervals(
         &self,
         data_cls: &str,
@@ -837,7 +834,7 @@ impl ParquetDataCatalogV2 {
 
     /// Query Parquet files for data matching the given criteria.
     #[pyo3(signature = (data_type, identifiers=None, start=None, end=None, where_clause=None, files=None, optimize_file_loading=true))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn query(
         &mut self,
         py: Python<'_>,
@@ -1363,7 +1360,7 @@ impl ParquetDataCatalogV2 {
     /// )
     /// ```
     #[pyo3(signature = (instance_id, data_cls, subdirectory=None, identifiers=None, use_ts_event_for_ts_init=false))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn convert_stream_to_data(
         &mut self,
         instance_id: &str,
@@ -1373,6 +1370,7 @@ impl ParquetDataCatalogV2 {
         use_ts_event_for_ts_init: bool,
     ) -> PyResult<()> {
         let subdir = subdirectory.unwrap_or("backtest");
+
         match self.inner.convert_stream_to_data(
             instance_id,
             data_cls,
@@ -1389,7 +1387,7 @@ impl ParquetDataCatalogV2 {
 
     /// Query custom data from Parquet files.
     #[pyo3(signature = (type_name, identifiers=None, start=None, end=None, where_clause=None))]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     pub fn query_custom_data(
         &mut self,
         py: Python<'_>,
@@ -1417,6 +1415,7 @@ impl ParquetDataCatalogV2 {
             .map_err(|e| PyIOError::new_err(format!("Failed to query custom data: {e}")))?;
 
         let mut python_objects = Vec::new();
+
         for item in data {
             let py_obj: Py<PyAny> = match item {
                 Data::Custom(custom) => Py::new(py, custom.clone())?.into_any(),

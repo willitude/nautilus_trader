@@ -31,7 +31,7 @@ use nautilus_common::{
 };
 use nautilus_core::{
     UnixNanos,
-    correctness::{FAILED, check_equal},
+    correctness::{CorrectnessResultExt, FAILED, check_equal},
 };
 use nautilus_execution::{
     matching_core::OrderMatchInfo,
@@ -169,7 +169,7 @@ impl SimulatedExchange {
     /// Returns an error if:
     /// - `starting_balances` is empty.
     /// - `base_currency` is `Some` but `starting_balances` contains multiple currencies.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         venue: Venue,
         oms_type: OmsType,
@@ -322,6 +322,7 @@ impl SimulatedExchange {
         }
     }
 
+    // panics-doc-ok (transitive via expect_display on venue mismatch)
     /// Adds an instrument to the simulated exchange and initializes its matching engine.
     ///
     /// # Errors
@@ -338,7 +339,7 @@ impl SimulatedExchange {
             "Venue of instrument id",
             "Venue of simulated exchange",
         )
-        .expect(FAILED);
+        .expect_display(FAILED);
 
         if self.account_type == AccountType::Cash
             && (matches!(instrument, InstrumentAny::CryptoPerpetual(_))
@@ -978,6 +979,7 @@ impl SimulatedExchange {
             } else {
                 panic!("Execution client should be initialized");
             };
+
             match command {
                 TradingCommand::SubmitOrder(command) => {
                     let mut order = self

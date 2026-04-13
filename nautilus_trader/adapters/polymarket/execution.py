@@ -241,6 +241,16 @@ class PolymarketExecutionClient(LiveExecutionClient):
         self._ack_events_order: dict[VenueOrderId, asyncio.Event] = {}
         self._ack_events_trade: dict[VenueOrderId, asyncio.Event] = {}
 
+    def calculate_commission(self, instrument, last_qty, last_px, liquidity_side):
+        commission = calculate_commission(
+            quantity=last_qty.as_decimal(),
+            price=last_px.as_decimal(),
+            fee_rate=instrument.taker_fee,
+            liquidity_side=liquidity_side,
+        )
+
+        return Money(commission, USDC_POS)
+
     async def _connect(self) -> None:
         await self._instrument_provider.initialize()
 
@@ -454,6 +464,7 @@ class PolymarketExecutionClient(LiveExecutionClient):
                 )
 
             venue_order_id_fill_reports: dict[VenueOrderId, list[FillReport]] = defaultdict(list)
+
             for fill in fill_reports:
                 if fill.venue_order_id in known_venue_order_ids:
                     continue  # Already reported
@@ -630,6 +641,7 @@ class PolymarketExecutionClient(LiveExecutionClient):
                 # Uncomment for development
                 # self._log.info(f"Processing {len(response)} trades", LogColor.MAGENTA)
                 parsed_fill_keys: set[tuple[TradeId, VenueOrderId]] = set()
+
                 for json_obj in response:
                     self._parse_trades_response_object(
                         command=command,
@@ -760,6 +772,7 @@ class PolymarketExecutionClient(LiveExecutionClient):
 
         # Map asset (token id) -> size (shares)
         size_by_asset: dict[str, float] = {}
+
         for p in positions:
             instrument_id = InstrumentId.from_str(
                 p.get("conditionId", "") + "-" + str(p.get("asset", "")) + ".POLYMARKET",
@@ -918,6 +931,7 @@ class PolymarketExecutionClient(LiveExecutionClient):
 
         # Filter orders that are actually open
         valid_cancels: list[CancelOrder] = []
+
         for cancel in command.cancels:
             if cancel.client_order_id in open_order_ids:
                 valid_cancels.append(cancel)
@@ -931,6 +945,7 @@ class PolymarketExecutionClient(LiveExecutionClient):
         retry_manager = await self._retry_manager_pool.acquire()
         try:
             order_ids = []
+
             for cancel in valid_cancels:
                 order = self._cache.order(cancel.client_order_id)
                 if order and order.venue_order_id:
@@ -1048,6 +1063,7 @@ class PolymarketExecutionClient(LiveExecutionClient):
                     f"Cancel all result: {len(canceled)} canceled, "
                     f"{len(not_canceled)} not canceled",
                 )
+
                 for order_id, reason in not_canceled.items():
                     self._log.warning(f"Order {order_id} not canceled: {reason}")
         finally:
@@ -1108,6 +1124,7 @@ class PolymarketExecutionClient(LiveExecutionClient):
                     f"Cancel market orders result: {len(canceled)} canceled, "
                     f"{len(not_canceled)} not canceled",
                 )
+
                 for order_id, reason in not_canceled.items():
                     self._log.warning(f"Order {order_id} not canceled: {reason}")
         finally:
@@ -1237,6 +1254,7 @@ class PolymarketExecutionClient(LiveExecutionClient):
 
         # Validate all orders before processing
         valid_orders = []
+
         for order in orders:
             denial_reason = self._validate_order_for_batch(order)
             if denial_reason:
@@ -2019,7 +2037,13 @@ class PolymarketExecutionClient(LiveExecutionClient):
         last_qty = instrument.make_qty(msg.last_qty(order_id))
         last_qty = self._fill_tracker.snap_fill_qty(venue_order_id, last_qty)
         last_px = instrument.make_price(msg.last_px(order_id))
-        commission = calculate_commission(last_qty, last_px, msg.get_fee_rate_bps(order_id))
+        liquidity_side = msg.liquidity_side()
+        commission = calculate_commission(
+            quantity=last_qty.as_decimal(),
+            price=last_px.as_decimal(),
+            fee_rate=instrument.taker_fee,
+            liquidity_side=liquidity_side,
+        )
         ts_event = secs_to_nanos(int(msg.match_time))
 
         self.generate_order_filled(
@@ -2035,7 +2059,7 @@ class PolymarketExecutionClient(LiveExecutionClient):
             last_px=last_px,
             quote_currency=USDC_POS,
             commission=Money(commission, USDC_POS),
-            liquidity_side=msg.liquidity_side(),
+            liquidity_side=liquidity_side,
             ts_event=ts_event,
             info=msg.to_dict(),
         )

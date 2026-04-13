@@ -675,6 +675,7 @@ mod tests {
             OrderEventAny::Filled(_) => panic!("Should not match"),
             _ => {}
         }
+
         match accepted {
             OrderEventAny::Rejected(_) => panic!("Should not match"),
             OrderEventAny::Canceled(_) => panic!("Should not match"),
@@ -685,7 +686,7 @@ mod tests {
         }
     }
 
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     fn create_test_components() -> (
         Rc<RefCell<dyn Clock>>,
         Rc<RefCell<Cache>>,

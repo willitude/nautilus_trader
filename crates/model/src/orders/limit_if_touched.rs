@@ -61,7 +61,6 @@ pub struct LimitIfTouchedOrder {
     core: OrderCore,
 }
 
-#[allow(clippy::too_many_arguments)]
 impl LimitIfTouchedOrder {
     /// Creates a new [`LimitIfTouchedOrder`] instance.
     ///
@@ -71,7 +70,7 @@ impl LimitIfTouchedOrder {
     /// - The `quantity` is not positive.
     /// - The `display_qty` (when provided) exceeds `quantity`.
     /// - The `time_in_force` is GTD and the `expire_time` is `None` or zero.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new_checked(
         trader_id: TraderId,
         strategy_id: StrategyId,
@@ -170,7 +169,8 @@ impl LimitIfTouchedOrder {
     /// # Panics
     ///
     /// Panics if any order validation fails (see [`LimitIfTouchedOrder::new_checked`]).
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         trader_id: TraderId,
         strategy_id: StrategyId,
@@ -621,9 +621,9 @@ mod tests {
     };
 
     #[rstest]
-    fn test_initialize(_audusd_sim: CurrencyPair) {
+    fn test_initialize(audusd_sim: CurrencyPair) {
         let order = OrderTestBuilder::new(OrderType::LimitIfTouched)
-            .instrument_id(_audusd_sim.id)
+            .instrument_id(audusd_sim.id)
             .side(OrderSide::Buy)
             .price(Price::from("0.68000"))
             .trigger_price(Price::from("0.68000"))
@@ -694,7 +694,7 @@ mod tests {
     #[rstest]
     #[should_panic(expected = "BUY Limit-If-Touched must have `trigger_price` <= `price`")]
     fn test_buy_trigger_gt_price(audusd_sim: CurrencyPair) {
-        OrderTestBuilder::new(OrderType::LimitIfTouched)
+        let _ = OrderTestBuilder::new(OrderType::LimitIfTouched)
             .instrument_id(audusd_sim.id)
             .side(OrderSide::Buy)
             .trigger_price(Price::from("30300")) // Invalid trigger > price
@@ -707,7 +707,7 @@ mod tests {
     #[rstest]
     #[should_panic(expected = "SELL Limit-If-Touched must have `trigger_price` >= `price`")]
     fn test_sell_trigger_lt_price(audusd_sim: CurrencyPair) {
-        OrderTestBuilder::new(OrderType::LimitIfTouched)
+        let _ = OrderTestBuilder::new(OrderType::LimitIfTouched)
             .instrument_id(audusd_sim.id)
             .side(OrderSide::Sell)
             .trigger_price(Price::from("30100")) // Invalid trigger < price

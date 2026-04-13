@@ -75,8 +75,8 @@ use crate::common::{
     encoder::encode_broker_id,
     enums::{
         BinanceAlgoType, BinanceEnvironment, BinanceFuturesOrderType, BinancePositionSide,
-        BinanceProductType, BinanceRateLimitInterval, BinanceRateLimitType, BinanceSide,
-        BinanceTimeInForce, BinanceWorkingType,
+        BinancePriceMatch, BinanceProductType, BinanceRateLimitInterval, BinanceRateLimitType,
+        BinanceSide, BinanceTimeInForce, BinanceWorkingType,
     },
     models::BinanceErrorResponse,
     parse::{parse_coinm_instrument, parse_usdm_instrument},
@@ -110,7 +110,7 @@ impl BinanceRawFuturesHttpClient {
     /// # Errors
     ///
     /// Returns an error if credentials are incomplete or the HTTP client fails to build.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         product_type: BinanceProductType,
         environment: BinanceEnvironment,
@@ -1104,6 +1104,7 @@ pub struct BinanceFuturesHttpClient {
     product_type: BinanceProductType,
     clock: &'static AtomicTime,
     instruments: Arc<DashMap<Ustr, BinanceFuturesInstrument>>,
+    treat_expired_as_canceled: bool,
 }
 
 impl BinanceFuturesHttpClient {
@@ -1112,7 +1113,7 @@ impl BinanceFuturesHttpClient {
     /// # Errors
     ///
     /// Returns an error if the product type is invalid or HTTP client creation fails.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         product_type: BinanceProductType,
         environment: BinanceEnvironment,
@@ -1123,6 +1124,7 @@ impl BinanceFuturesHttpClient {
         recv_window: Option<u64>,
         timeout_secs: Option<u64>,
         proxy_url: Option<String>,
+        treat_expired_as_canceled: bool,
     ) -> BinanceFuturesHttpResult<Self> {
         match product_type {
             BinanceProductType::UsdM | BinanceProductType::CoinM => {}
@@ -1149,6 +1151,7 @@ impl BinanceFuturesHttpClient {
             product_type,
             clock,
             instruments: Arc::new(DashMap::new()),
+            treat_expired_as_canceled,
         })
     }
 
@@ -1253,6 +1256,7 @@ impl BinanceFuturesHttpClient {
                     .inner
                     .get("exchangeInfo", None::<&()>, false, false)
                     .await?;
+
                 for symbol in info.symbols {
                     self.instruments
                         .insert(symbol.symbol, BinanceFuturesInstrument::UsdM(symbol));
@@ -1263,6 +1267,7 @@ impl BinanceFuturesHttpClient {
                     .inner
                     .get("exchangeInfo", None::<&()>, false, false)
                     .await?;
+
                 for symbol in info.symbols {
                     self.instruments
                         .insert(symbol.symbol, BinanceFuturesInstrument::CoinM(symbol));
@@ -1298,6 +1303,7 @@ impl BinanceFuturesHttpClient {
                     .inner
                     .get("exchangeInfo", None::<&()>, false, false)
                     .await?;
+
                 for symbol in &info.symbols {
                     statuses.insert(symbol.symbol, MarketStatusAction::from(symbol.status));
                 }
@@ -1307,6 +1313,7 @@ impl BinanceFuturesHttpClient {
                     .inner
                     .get("exchangeInfo", None::<&()>, false, false)
                     .await?;
+
                 for symbol in &info.symbols {
                     let action = symbol
                         .contract_status
@@ -1568,7 +1575,7 @@ impl BinanceFuturesHttpClient {
     /// - The order type or time-in-force is unsupported.
     /// - Stop orders are submitted without a trigger price.
     /// - The request fails.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn submit_order(
         &self,
         account_id: AccountId,
@@ -1583,6 +1590,7 @@ impl BinanceFuturesHttpClient {
         reduce_only: bool,
         post_only: bool,
         position_side: Option<BinancePositionSide>,
+        price_match: Option<BinancePriceMatch>,
     ) -> anyhow::Result<OrderStatusReport> {
         let symbol = format_binance_symbol(&instrument_id);
         let size_precision = self.get_size_precision(&symbol)?;
@@ -1615,7 +1623,11 @@ impl BinanceFuturesHttpClient {
         );
 
         let qty_str = quantity.to_string();
-        let price_str = price.map(|p| p.to_string());
+        let price_str = if price_match.is_some() {
+            None
+        } else {
+            price.map(|p| p.to_string())
+        };
         let stop_price_str = trigger_price.map(|p| p.to_string());
         let client_id_str = encode_broker_id(&client_order_id, BINANCE_NAUTILUS_FUTURES_BROKER_ID);
 
@@ -1642,13 +1654,19 @@ impl BinanceFuturesHttpClient {
             new_order_resp_type: None,
             good_till_date: None,
             recv_window: None,
-            price_match: None,
+            price_match,
             self_trade_prevention_mode: None,
         };
 
         let order = self.inner.submit_order(&params).await?;
         let ts_init = self.clock.get_time_ns();
-        order.to_order_status_report(account_id, instrument_id, size_precision, ts_init)
+        order.to_order_status_report(
+            account_id,
+            instrument_id,
+            size_precision,
+            self.treat_expired_as_canceled,
+            ts_init,
+        )
     }
 
     /// Submits an algo order (conditional order) to the Binance Algo Service.
@@ -1663,7 +1681,7 @@ impl BinanceFuturesHttpClient {
     /// - The order type requires a trigger price but none is provided.
     /// - The instrument is not cached.
     /// - The request fails.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn submit_algo_order(
         &self,
         account_id: AccountId,
@@ -1786,7 +1804,7 @@ impl BinanceFuturesHttpClient {
     /// - Neither venue_order_id nor client_order_id is provided.
     /// - The instrument is not cached.
     /// - The request fails.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn modify_order(
         &self,
         account_id: AccountId,
@@ -1825,7 +1843,13 @@ impl BinanceFuturesHttpClient {
 
         let order = self.inner.modify_order(&params).await?;
         let ts_init = self.clock.get_time_ns();
-        order.to_order_status_report(account_id, instrument_id, size_precision, ts_init)
+        order.to_order_status_report(
+            account_id,
+            instrument_id,
+            size_precision,
+            self.treat_expired_as_canceled,
+            ts_init,
+        )
     }
 
     /// Modifies multiple orders in a single request (up to 5 orders).
@@ -2097,7 +2121,13 @@ impl BinanceFuturesHttpClient {
 
         let order = self.inner.query_order(&params).await?;
         let ts_init = self.clock.get_time_ns();
-        order.to_order_status_report(account_id, instrument_id, size_precision, ts_init)
+        order.to_order_status_report(
+            account_id,
+            instrument_id,
+            size_precision,
+            self.treat_expired_as_canceled,
+            ts_init,
+        )
     }
 
     /// Requests order status reports for open orders.
@@ -2153,6 +2183,7 @@ impl BinanceFuturesHttpClient {
                 account_id,
                 order_instrument_id,
                 size_precision,
+                self.treat_expired_as_canceled,
                 ts_init,
             ) {
                 Ok(report) => reports.push(report),
@@ -2425,6 +2456,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         );
 
         assert!(result.is_err());

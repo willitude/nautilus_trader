@@ -86,8 +86,8 @@ use crate::common::{
     consts::{BYBIT_NAUTILUS_BROKER_ID, BYBIT_VENUE},
     credential::{Credential, credential_env_vars},
     enums::{
-        BybitAccountType, BybitEnvironment, BybitMarginMode, BybitOpenOnly, BybitOrderFilter,
-        BybitOrderSide, BybitOrderType, BybitPositionMode, BybitProductType,
+        BybitAccountType, BybitContractType, BybitEnvironment, BybitMarginMode, BybitOpenOnly,
+        BybitOrderFilter, BybitOrderSide, BybitOrderType, BybitPositionMode, BybitProductType,
     },
     models::{BybitCursorListResponse, BybitErrorCheck, BybitResponseCheck},
     parse::{
@@ -175,7 +175,7 @@ impl Debug for BybitRawHttpClient {
 
 impl BybitRawHttpClient {
     /// Cancels all pending HTTP requests.
-    #[allow(clippy::missing_panics_doc, reason = "mutex poisoning is not expected")]
+    #[expect(clippy::missing_panics_doc, reason = "mutex poisoning is not expected")]
     pub fn cancel_all_requests(&self) {
         self.cancellation_token
             .lock()
@@ -185,7 +185,7 @@ impl BybitRawHttpClient {
 
     /// Replaces the cancelled token with a fresh one so subsequent
     /// requests are not immediately short-circuited.
-    #[allow(clippy::missing_panics_doc, reason = "mutex poisoning is not expected")]
+    #[expect(clippy::missing_panics_doc, reason = "mutex poisoning is not expected")]
     pub fn reset_cancellation_token(&self) {
         let mut guard = self
             .cancellation_token
@@ -195,7 +195,7 @@ impl BybitRawHttpClient {
     }
 
     /// Returns a clone of the current cancellation token.
-    #[allow(clippy::missing_panics_doc, reason = "mutex poisoning is not expected")]
+    #[expect(clippy::missing_panics_doc, reason = "mutex poisoning is not expected")]
     pub fn cancellation_token(&self) -> CancellationToken {
         self.cancellation_token
             .lock()
@@ -208,7 +208,6 @@ impl BybitRawHttpClient {
     /// # Errors
     ///
     /// Returns an error if the retry manager cannot be created.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         base_url: Option<String>,
         timeout_secs: u64,
@@ -257,7 +256,7 @@ impl BybitRawHttpClient {
     /// # Errors
     ///
     /// Returns an error if the HTTP client cannot be created.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn with_credentials(
         api_key: String,
         api_secret: String,
@@ -314,7 +313,7 @@ impl BybitRawHttpClient {
     /// # Errors
     ///
     /// Returns an error if the HTTP client cannot be created.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new_with_env(
         api_key: Option<String>,
         api_secret: Option<String>,
@@ -772,7 +771,7 @@ impl BybitRawHttpClient {
     /// # References
     ///
     /// - <https://bybit-exchange.github.io/docs/v5/order/open-order>
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn get_open_orders(
         &self,
         category: BybitProductType,
@@ -1282,7 +1281,6 @@ impl BybitHttpClient {
     /// # Errors
     ///
     /// Returns an error if the retry manager cannot be created.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         base_url: Option<String>,
         timeout_secs: u64,
@@ -1314,7 +1312,7 @@ impl BybitHttpClient {
     /// # Errors
     ///
     /// Returns an error if the retry manager cannot be created.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn with_credentials(
         api_key: String,
         api_secret: String,
@@ -1357,7 +1355,7 @@ impl BybitHttpClient {
     /// # Errors
     ///
     /// Returns an error if the retry manager cannot be created.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new_with_env(
         api_key: Option<String>,
         api_secret: Option<String>,
@@ -1624,7 +1622,7 @@ impl BybitHttpClient {
     /// # References
     ///
     /// - <https://bybit-exchange.github.io/docs/v5/order/open-order>
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn get_open_orders(
         &self,
         category: BybitProductType,
@@ -2050,7 +2048,7 @@ impl BybitHttpClient {
     /// - Order validation fails.
     /// - The order is rejected.
     /// - The API returns an error.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn submit_order(
         &self,
         account_id: AccountId,
@@ -2294,6 +2292,7 @@ impl BybitHttpClient {
 
         // Query each order to get full details after cancellation
         let mut reports = Vec::new();
+
         for (instrument_id, (client_order_id, venue_order_id)) in instrument_ids
             .iter()
             .zip(client_order_ids.iter().zip(venue_order_ids.iter()))
@@ -2390,6 +2389,7 @@ impl BybitHttpClient {
         let ts_init = self.generate_ts_init();
 
         let mut reports = Vec::new();
+
         for order in order_response.result.list {
             if let Ok(report) = parse_order_status_report(&order, &instrument, account_id, ts_init)
             {
@@ -2410,7 +2410,7 @@ impl BybitHttpClient {
     /// - The order doesn't exist.
     /// - The order is already closed.
     /// - The API returns an error.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn modify_order(
         &self,
         account_id: AccountId,
@@ -2675,6 +2675,7 @@ impl BybitHttpClient {
         let Ok(params) = fee_params.build() else {
             return Ok(AHashMap::new());
         };
+
         match self.inner.get_fee_rate(&params).await {
             Ok(response) => Ok(response
                 .result
@@ -2705,6 +2706,7 @@ impl BybitHttpClient {
         let Ok(params) = fee_params.build() else {
             return Ok(AHashMap::new());
         };
+
         match self.inner.get_fee_rate(&params).await {
             Ok(response) => Ok(response
                 .result
@@ -2805,6 +2807,7 @@ impl BybitHttpClient {
                 BybitProductType::Spot => {
                     let response: BybitCursorListResponse<BybitInstrumentSpot> =
                         self.inner.get_instruments(&params).await?;
+
                     for def in &response.result.list {
                         let symbol = make_bybit_symbol(def.symbol, product_type);
                         let id = InstrumentId::new(Symbol::from(symbol), *BYBIT_VENUE);
@@ -2815,26 +2818,45 @@ impl BybitHttpClient {
                 BybitProductType::Linear => {
                     let response: BybitCursorListResponse<BybitInstrumentLinear> =
                         self.inner.get_instruments(&params).await?;
+
                     for def in &response.result.list {
                         let symbol = make_bybit_symbol(def.symbol, product_type);
                         let id = InstrumentId::new(Symbol::from(symbol), *BYBIT_VENUE);
-                        statuses.insert(id, MarketStatusAction::from(def.status));
+                        let status = MarketStatusAction::from(def.status);
+                        if status == MarketStatusAction::Trading
+                            && def.contract_type == BybitContractType::LinearPerpetual
+                            && def.delivery_time != "0"
+                        {
+                            statuses.insert(id, MarketStatusAction::PreClose);
+                        } else {
+                            statuses.insert(id, status);
+                        }
                     }
                     cursor = response.result.next_page_cursor;
                 }
                 BybitProductType::Inverse => {
                     let response: BybitCursorListResponse<BybitInstrumentInverse> =
                         self.inner.get_instruments(&params).await?;
+
                     for def in &response.result.list {
                         let symbol = make_bybit_symbol(def.symbol, product_type);
                         let id = InstrumentId::new(Symbol::from(symbol), *BYBIT_VENUE);
-                        statuses.insert(id, MarketStatusAction::from(def.status));
+                        let status = MarketStatusAction::from(def.status);
+                        if status == MarketStatusAction::Trading
+                            && def.contract_type == BybitContractType::InversePerpetual
+                            && def.delivery_time != "0"
+                        {
+                            statuses.insert(id, MarketStatusAction::PreClose);
+                        } else {
+                            statuses.insert(id, status);
+                        }
                     }
                     cursor = response.result.next_page_cursor;
                 }
                 BybitProductType::Option => {
                     let response: BybitCursorListResponse<BybitInstrumentOption> =
                         self.inner.get_instruments(&params).await?;
+
                     for def in &response.result.list {
                         let symbol = make_bybit_symbol(def.symbol, product_type);
                         let id = InstrumentId::new(Symbol::from(symbol), *BYBIT_VENUE);
@@ -3467,7 +3489,7 @@ impl BybitHttpClient {
     /// - Credentials are missing.
     /// - The request fails.
     /// - The API returns an error.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn request_order_status_reports(
         &self,
         account_id: AccountId,
@@ -3758,6 +3780,7 @@ impl BybitHttpClient {
         let ts_init = self.generate_ts_init();
 
         let mut reports = Vec::new();
+
         for order in all_collected_orders {
             if let Some(ref instrument_id) = instrument_id {
                 let instrument = self.instrument_from_cache(&instrument_id.symbol)?;

@@ -827,7 +827,7 @@ pub trait Strategy: DataActor {
     /// # Errors
     ///
     /// Returns an error if the strategy is not registered or position closing fails.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn close_all_positions(
         &mut self,
         instrument_id: InstrumentId,
@@ -1257,9 +1257,11 @@ pub trait Strategy: DataActor {
         for order in &open_orders {
             instruments.insert(order.instrument_id());
         }
+
         for order in &inflight_orders {
             instruments.insert(order.instrument_id());
         }
+
         for position in &open_positions {
             instruments.insert(position.instrument_id);
         }

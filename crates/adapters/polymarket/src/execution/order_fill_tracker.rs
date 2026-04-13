@@ -58,7 +58,6 @@ impl OrderFillTrackerMap {
     }
 
     /// Register an order after HTTP accept.
-    #[allow(clippy::too_many_arguments)]
     pub fn register(
         &self,
         venue_order_id: VenueOrderId,
@@ -111,6 +110,19 @@ impl OrderFillTrackerMap {
             .map(|s| s.cumulative_filled)
     }
 
+    /// Returns `true` if cumulative fills have reached the submitted quantity
+    /// (within a tight tolerance to account for f64 accumulation noise).
+    pub fn is_fully_filled(&self, venue_order_id: &VenueOrderId) -> bool {
+        self.inner
+            .lock()
+            .expect(MUTEX_POISONED)
+            .get(venue_order_id)
+            .is_some_and(|s| {
+                let leaves = s.submitted_qty.as_f64() - s.cumulative_filled;
+                leaves < 1e-9
+            })
+    }
+
     /// Record a fill, updating cumulative total and last price/ts.
     pub fn record_fill(&self, venue_order_id: &VenueOrderId, qty: f64, px: f64, ts: UnixNanos) {
         if let Some(s) = self
@@ -150,7 +162,7 @@ impl OrderFillTrackerMap {
     /// Returns `Some(FillReport)` if a synthetic fill should be emitted.
     /// Removes the entry on dust settlement to prevent duplicate synthetic
     /// fills from repeated MATCHED events.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn check_dust_and_build_fill(
         &self,
         venue_order_id: &VenueOrderId,
@@ -516,5 +528,47 @@ mod tests {
         let tracker = OrderFillTrackerMap::new();
         let vid = VenueOrderId::from("unknown");
         assert!(tracker.get_cumulative_filled(&vid).is_none());
+    }
+
+    #[rstest]
+    fn test_is_fully_filled_unregistered() {
+        let tracker = OrderFillTrackerMap::new();
+        let vid = VenueOrderId::from("unknown");
+        assert!(!tracker.is_fully_filled(&vid));
+    }
+
+    #[rstest]
+    fn test_is_fully_filled_partial() {
+        let tracker = OrderFillTrackerMap::new();
+        let vid = VenueOrderId::from("order-1");
+        tracker.register(
+            vid,
+            Quantity::new(100.0, 6),
+            OrderSide::Buy,
+            InstrumentId::from("TEST.POLYMARKET"),
+            6,
+            2,
+        );
+
+        tracker.record_fill(&vid, 50.0, 0.5, UnixNanos::from(1_000u64));
+        assert!(!tracker.is_fully_filled(&vid));
+    }
+
+    #[rstest]
+    fn test_is_fully_filled_complete() {
+        let tracker = OrderFillTrackerMap::new();
+        let vid = VenueOrderId::from("order-1");
+        tracker.register(
+            vid,
+            Quantity::new(100.0, 6),
+            OrderSide::Buy,
+            InstrumentId::from("TEST.POLYMARKET"),
+            6,
+            2,
+        );
+
+        tracker.record_fill(&vid, 60.0, 0.5, UnixNanos::from(1_000u64));
+        tracker.record_fill(&vid, 40.0, 0.5, UnixNanos::from(2_000u64));
+        assert!(tracker.is_fully_filled(&vid));
     }
 }

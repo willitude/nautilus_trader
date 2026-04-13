@@ -9,7 +9,7 @@ PROFILE="nextest"
 
 run_full() {
   echo "Running full workspace clippy"
-  exec cargo clippy --workspace --all-targets \
+  exec cargo clippy --workspace --lib --tests \
     --features "$(
       IFS=,
       echo "${DESIRED_FEATURES[*]}"
@@ -97,6 +97,21 @@ for p in data['packages']:
   done
 done
 
+# When 'defi' is enabled on nautilus-common, Cargo feature unification adds the
+# DeFi variant to DataEvent for all consumers. nautilus-live matches on DataEvent
+# and gates its arm behind its own 'defi' feature, so it must be in the package
+# list to receive the feature flag and compile the match arm.
+if [[ " $feat_seen " == *" defi "* ]]; then
+  case " $seen " in
+    *" nautilus-live "*) ;;
+    *)
+      seen="$seen nautilus-live"
+      seen_list+=("nautilus-live")
+      pkg_args+=("-p" "nautilus-live")
+      ;;
+  esac
+fi
+
 feat_args=()
 if [ -n "$feat_seen" ]; then
   feat_str="${feat_seen## }"
@@ -105,5 +120,5 @@ if [ -n "$feat_seen" ]; then
 fi
 
 echo "Running clippy on: ${seen_list[*]}"
-cargo clippy "${pkg_args[@]}" --all-targets "${feat_args[@]}" \
+cargo clippy "${pkg_args[@]}" --lib --tests "${feat_args[@]}" \
   --profile "$PROFILE" -- -D warnings

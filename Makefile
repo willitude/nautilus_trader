@@ -15,6 +15,8 @@ CARGO_MACHETE_VERSION := $(shell bash scripts/cargo-tool-version.sh cargo-machet
 CARGO_NEXTEST_VERSION := $(shell bash scripts/cargo-tool-version.sh cargo-nextest)
 CARGO_VET_VERSION := $(shell bash scripts/cargo-tool-version.sh cargo-vet)
 LYCHEE_VERSION := $(shell bash scripts/cargo-tool-version.sh lychee)
+# Tool versions from tools.toml
+PREK_VERSION := $(shell bash scripts/tool-version.sh prek)
 UV_VERSION := $(shell bash scripts/uv-version.sh)
 
 V = 0  # 0 / 1 - verbose mode
@@ -83,9 +85,9 @@ endif
 # Can be disabled: make cargo-test-core DEFI=false
 DEFI ?= true
 ifeq ($(DEFI),true)
-BASE_FEATURES := arrow,ffi,python,high-precision,streaming,defi,examples
+BASE_FEATURES := arrow,ffi,python,high-precision,streaming,defi
 else
-BASE_FEATURES := arrow,ffi,python,high-precision,streaming,examples
+BASE_FEATURES := arrow,ffi,python,high-precision,streaming
 endif
 
 # Combine base features with extra features
@@ -93,20 +95,6 @@ ifneq ($(strip $(EXTRA_FEATURES)),)
 CARGO_FEATURES := $(BASE_FEATURES),$(EXTRA_FEATURES)
 else
 CARGO_FEATURES := $(BASE_FEATURES)
-endif
-
-# LOCAL_CARGO_FEATURES matches the default dev feature set but skips examples so
-# local targets avoid compiling workspace examples and example-only code paths.
-ifeq ($(DEFI),true)
-LOCAL_BASE_FEATURES := arrow,ffi,python,high-precision,streaming,defi
-else
-LOCAL_BASE_FEATURES := arrow,ffi,python,high-precision,streaming
-endif
-
-ifneq ($(strip $(EXTRA_FEATURES)),)
-LOCAL_CARGO_FEATURES := $(LOCAL_BASE_FEATURES),$(EXTRA_FEATURES)
-else
-LOCAL_CARGO_FEATURES := $(LOCAL_BASE_FEATURES)
 endif
 
 # Core crates (excludes adapters/*, nautilus-pyo3, nautilus-cli)
@@ -214,18 +202,18 @@ clean: clean-build-artifacts clean-caches clean-builds  #-- Clean all build arti
 
 .PHONY: clean-builds
 clean-builds:  #-- Clean distribution and target directories
-	$Q rm -rf dist target 2>/dev/null || true
+	$Q rm -rf dist target target-v2 2>/dev/null || true
 
 .PHONY: clean-build-artifacts
 clean-build-artifacts:  #-- Clean compiled artifacts (.so, .dll, .pyc, .c files)
 	@echo "Cleaning build artifacts..."
 	# Clean Rust build artifacts (keep final libraries)
-	find target -name "*.rlib" -delete 2>/dev/null || true
-	find target -name "*.rmeta" -delete 2>/dev/null || true
-	rm -rf target/*/build target/*/deps 2>/dev/null || true
+	find target target-v2 -name "*.rlib" -delete 2>/dev/null || true
+	find target target-v2 -name "*.rmeta" -delete 2>/dev/null || true
+	rm -rf target/*/build target/*/deps target-v2/*/build target-v2/*/deps 2>/dev/null || true
 	# Clean Python build artifacts
 	find . -type d -name "__pycache__" -not -path "./.venv*" -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.c" -not -path "./.venv*" -not -path "./target/*" -exec rm -f {} + 2>/dev/null || true
+	find . -type f -name "*.c" -not -path "./.venv*" -not -path "./target/*" -not -path "./target-v2/*" -exec rm -f {} + 2>/dev/null || true
 	find . -type f -a \( -name "*.pyc" -o -name "*.pyo" \) -not -path "./.venv*" -exec rm -f {} + 2>/dev/null || true
 	find . -type f -a \( -name "*.so" -o -name "*.dll" -o -name "*.dylib" \) -not -path "./.venv*" -exec rm -f {} + 2>/dev/null || true
 	rm -rf build/ cython_debug/ 2>/dev/null || true
@@ -237,6 +225,7 @@ clean-caches:  #-- Clean pytest, mypy, ruff, uv, and cargo caches
 	rm -rf .pytest_cache .mypy_cache .ruff_cache 2>/dev/null || true
 	-uv cache prune --force
 	-cargo clean --workspace
+	-CARGO_TARGET_DIR=target-v2 cargo clean --workspace
 
 .PHONY: distclean
 distclean: clean  #-- Nuclear clean - remove all untracked files (requires FORCE=1)
@@ -256,20 +245,26 @@ format:  #-- Format Rust (with nightly) and Python code
 
 .PHONY: pre-commit
 pre-commit:  #-- Run all pre-commit hooks on all files
-	uv run --active --no-sync pre-commit run --all-files
+	prek run --all-files
 
 # The check-code target uses CARGO_FEATURES which is controlled by the HYPERSYNC flag.
 # By default, hypersync is excluded to speed up checks. Override with: make check-code HYPERSYNC=true
 .PHONY: check-code
-check-code:  #-- Run clippy, and ruff --fix (use HYPERSYNC=true to include hypersync feature)
+check-code:  #-- Run clippy on lib/test targets and ruff --fix (use HYPERSYNC=true to include hypersync feature)
 	$(info $(M) Running code quality checks...)
-	@cargo clippy --workspace --all-targets --features "$(CARGO_FEATURES)" --profile nextest -- -D warnings
+	@cargo clippy --workspace --lib --tests --features "$(CARGO_FEATURES)" --profile nextest -- -D warnings
 	@uv run --active --no-sync ruff check . --fix
 	@printf "$(GREEN)Checks passed$(RESET)\n"
 
+.PHONY: check-all-targets
+check-all-targets:  #-- Run clippy on all targets including bins and examples (nightly)
+	$(info $(M) Running full clippy on all targets...)
+	@cargo clippy --workspace --all-targets --features "$(CARGO_FEATURES),examples" --profile nextest -- -D warnings
+	@printf "$(GREEN)All-targets check passed$(RESET)\n"
+
 .PHONY: pre-flight
 pre-flight: export CARGO_TARGET_DIR=$(TARGET_DIR)
-pre-flight:  #-- Run comprehensive pre-flight checks (format, check-code, cargo-test, build-debug, pytest, security-audit)
+pre-flight:  #-- Run pre-flight checks (format, check-code, cargo-test, build-debug, pytest)
 	$(info $(M) Running pre-flight checks...)
 	@if ! git diff --quiet; then \
 		printf "$(RED)ERROR: You have unstaged changes$(RESET)\n"; \
@@ -283,30 +278,6 @@ pre-flight:  #-- Run comprehensive pre-flight checks (format, check-code, cargo-
 	@$(MAKE) --no-print-directory build-debug
 	@$(MAKE) --no-print-directory pytest
 	@printf "$(GREEN)All pre-flight checks passed$(RESET)\n"
-
-.PHONY: pre-flight-local
-pre-flight-local: export CARGO_TARGET_DIR=$(TARGET_DIR)
-pre-flight-local:  #-- Run faster local pre-flight checks without compiling bins/examples
-	$(info $(M) Running local pre-flight checks...)
-	@if ! git diff --quiet; then \
-		printf "$(RED)ERROR: You have unstaged changes$(RESET)\n"; \
-		printf "$(YELLOW)Stage your changes first:$(RESET) git add .\n"; \
-		exit 1; \
-	fi
-	@$(MAKE) --no-print-directory install-deps
-	@$(MAKE) --no-print-directory format
-	@$(MAKE) --no-print-directory check-code-local EXTRA_FEATURES="capnp,hypersync"
-	@$(MAKE) --no-print-directory cargo-test-extras-local
-	@$(MAKE) --no-print-directory build-debug
-	@$(MAKE) --no-print-directory pytest
-	@printf "$(GREEN)All local pre-flight checks passed$(RESET)\n"
-
-.PHONY: check-code-local
-check-code-local:  #-- Run clippy on libs/tests only for faster local checks
-	$(info $(M) Running local code quality checks...)
-	@cargo clippy --workspace --lib --tests --features "$(LOCAL_CARGO_FEATURES)" --profile nextest -- -D warnings
-	@uv run --active --no-sync ruff check . --fix
-	@printf "$(GREEN)Local checks passed$(RESET)\n"
 
 .PHONY: ruff
 ruff:  #-- Run ruff linter with automatic fixes
@@ -354,7 +325,7 @@ update: cargo-update  #-- Update all dependencies (cargo and uv)
 	uv self update $(UV_VERSION) && uv lock --upgrade
 
 .PHONY: install-tools
-install-tools:  #-- Install required development tools (Rust tools from Cargo.toml, uv from pyproject.toml)
+install-tools: check-binstall-installed  #-- Install required development tools (pinned versions from Cargo.toml, tools.toml, pyproject.toml)
 	cargo install cargo-deny --version $(CARGO_DENY_VERSION) --locked \
 	&& cargo install cargo-edit --version $(CARGO_EDIT_VERSION) --locked \
 	&& cargo install cargo-machete --version $(CARGO_MACHETE_VERSION) --locked \
@@ -363,7 +334,9 @@ install-tools:  #-- Install required development tools (Rust tools from Cargo.to
 	&& cargo install cargo-audit --version $(CARGO_AUDIT_VERSION) --locked \
 	&& cargo install cargo-vet --version $(CARGO_VET_VERSION) --locked \
 	&& cargo install lychee --version $(LYCHEE_VERSION) --locked \
-	&& uv self update $(UV_VERSION)
+	&& cargo binstall prek --version $(PREK_VERSION) --no-confirm --locked \
+	&& uv self update $(UV_VERSION) \
+	&& bash scripts/install-osv-scanner.sh
 
 #== Security
 
@@ -455,6 +428,15 @@ check-deny-installed:  #-- Verify cargo-deny is installed
 		exit 1; \
 	fi
 
+.PHONY: check-binstall-installed
+check-binstall-installed:  #-- Verify cargo-binstall is installed (one-off prerequisite for install-tools)
+	@if ! command -v cargo-binstall >/dev/null 2>&1; then \
+		printf "$(YELLOW)cargo-binstall is required but not installed$(RESET)\n"; \
+		printf "Install once per machine with: $(CYAN)cargo install cargo-binstall --locked$(RESET)\n"; \
+		printf "See: https://github.com/cargo-bins/cargo-binstall\n"; \
+		exit 1; \
+	fi
+
 .PHONY: check-vet-installed
 check-vet-installed:  #-- Verify cargo-vet is installed
 	@if ! cargo vet --version >/dev/null 2>&1; then \
@@ -463,10 +445,15 @@ check-vet-installed:  #-- Verify cargo-vet is installed
 	fi
 
 .PHONY: check-osv-scanner-installed
-check-osv-scanner-installed:  #-- Verify osv-scanner is installed
+check-osv-scanner-installed:  #-- Verify osv-scanner is installed and version matches tools.toml
 	@if ! osv-scanner --version >/dev/null 2>&1; then \
 		echo "osv-scanner is not installed. See https://google.github.io/osv-scanner/installation/"; \
 		exit 1; \
+	fi
+	@EXPECTED=$$(bash scripts/tool-version.sh osv-scanner); \
+	INSTALLED=$$(osv-scanner --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1); \
+	if [ "$$INSTALLED" != "$$EXPECTED" ]; then \
+		printf "$(YELLOW)osv-scanner version mismatch: installed %s, expected %s (from tools.toml)$(RESET)\n" "$$INSTALLED" "$$EXPECTED"; \
 	fi
 
 # Testing tool checks
@@ -537,31 +524,15 @@ cargo-test: check-nextest-installed
 cargo-test:  #-- Run all Rust tests (use EXTRA_FEATURES="feature1 feature2" or HYPERSYNC=true)
 ifeq ($(VERBOSE),true)
 	$(info $(M) Running Rust tests with verbose output...)
-	cargo nextest run --workspace --features "$(CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --verbose
+	cargo nextest run --workspace --lib --tests --features "$(CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --verbose
 else
 	$(info $(M) Running Rust tests (showing summary and failures only)...)
-	cargo nextest run --workspace --features "$(CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --status-level fail --final-status-level flaky
+	cargo nextest run --workspace --lib --tests --features "$(CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --status-level fail --final-status-level flaky
 endif
 
 .PHONY: cargo-test-extras
 cargo-test-extras:  #-- Run all Rust tests with capnp and hypersync features (convenience shortcut)
 	$(MAKE) cargo-test EXTRA_FEATURES="capnp,hypersync"
-
-.PHONY: cargo-test-extras-local
-cargo-test-extras-local:  #-- Run local Rust tests with capnp and hypersync features
-	$(MAKE) cargo-test-local EXTRA_FEATURES="capnp,hypersync"
-
-.PHONY: cargo-test-local
-cargo-test-local: export RUST_BACKTRACE=1
-cargo-test-local: check-nextest-installed
-cargo-test-local:  #-- Run Rust lib/test targets only for faster local iteration
-ifeq ($(VERBOSE),true)
-	$(info $(M) Running local Rust tests...)
-	cargo nextest run --workspace --lib --tests --features "$(LOCAL_CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --verbose
-else
-	$(info $(M) Running local Rust tests (showing summary and failures only)...)
-	cargo nextest run --workspace --lib --tests --features "$(LOCAL_CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --status-level fail --final-status-level flaky
-endif
 
 # Both core and adapter targets use identical --workspace --features flags so
 # cargo sees the same feature union and does not recompile between runs.
@@ -575,10 +546,10 @@ cargo-test-core-local: check-nextest-installed
 cargo-test-core-local:  #-- Run Rust tests for core crates only with direct package selection (fast local compile)
 ifeq ($(VERBOSE),true)
 	$(info $(M) Running Rust tests for core crates with direct package selection...)
-	cargo nextest run $(foreach crate,$(CORE_CRATES),-p $(crate)) --features "$(CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --verbose
+	cargo nextest run $(foreach crate,$(CORE_CRATES),-p $(crate)) --lib --tests --features "$(CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --verbose
 else
 	$(info $(M) Running Rust tests for core crates with direct package selection (showing summary and failures only)...)
-	cargo nextest run $(foreach crate,$(CORE_CRATES),-p $(crate)) --features "$(CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --status-level fail --final-status-level flaky
+	cargo nextest run $(foreach crate,$(CORE_CRATES),-p $(crate)) --lib --tests --features "$(CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --status-level fail --final-status-level flaky
 endif
 
 .PHONY: cargo-test-core
@@ -587,10 +558,10 @@ cargo-test-core: check-nextest-installed
 cargo-test-core:  #-- Run Rust tests for core crates only (excludes adapters)
 ifeq ($(VERBOSE),true)
 	$(info $(M) Running Rust tests for core crates...)
-	cargo nextest run --workspace --features "$(CARGO_FEATURES)" -E '$(CORE_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --verbose
+	cargo nextest run --workspace --lib --tests --features "$(CARGO_FEATURES)" -E '$(CORE_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --verbose
 else
 	$(info $(M) Running Rust tests for core crates (showing summary and failures only)...)
-	cargo nextest run --workspace --features "$(CARGO_FEATURES)" -E '$(CORE_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --status-level fail --final-status-level flaky
+	cargo nextest run --workspace --lib --tests --features "$(CARGO_FEATURES)" -E '$(CORE_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --status-level fail --final-status-level flaky
 endif
 
 .PHONY: cargo-test-adapters
@@ -599,23 +570,23 @@ cargo-test-adapters: check-nextest-installed
 cargo-test-adapters:  #-- Run Rust tests for adapter crates only
 ifeq ($(VERBOSE),true)
 	$(info $(M) Running Rust tests for adapter crates...)
-	cargo nextest run --workspace --features "$(CARGO_FEATURES)" -E '$(ADAPTER_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --verbose
+	cargo nextest run --workspace --lib --tests --features "$(CARGO_FEATURES)" -E '$(ADAPTER_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --verbose
 else
 	$(info $(M) Running Rust tests for adapter crates (showing summary and failures only)...)
-	cargo nextest run --workspace --features "$(CARGO_FEATURES)" -E '$(ADAPTER_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --status-level fail --final-status-level flaky
+	cargo nextest run --workspace --lib --tests --features "$(CARGO_FEATURES)" -E '$(ADAPTER_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE) --cargo-profile nextest --status-level fail --final-status-level flaky
 endif
 
 .PHONY: cargo-test-core-debug
 cargo-test-core-debug: export RUST_BACKTRACE=1
 cargo-test-core-debug: check-nextest-installed
 cargo-test-core-debug:  #-- Run Rust tests for core crates (debug profile)
-	cargo nextest run --workspace --features "$(CARGO_FEATURES)" -E '$(CORE_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE)
+	cargo nextest run --workspace --lib --tests --features "$(CARGO_FEATURES)" -E '$(CORE_FILTERSET)' $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE)
 
 .PHONY: cargo-test-core-local-debug
 cargo-test-core-local-debug: export RUST_BACKTRACE=1
 cargo-test-core-local-debug: check-nextest-installed
 cargo-test-core-local-debug:  #-- Run Rust tests for core crates with direct package selection (debug profile)
-	cargo nextest run $(foreach crate,$(CORE_CRATES),-p $(crate)) --features "$(CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE)
+	cargo nextest run $(foreach crate,$(CORE_CRATES),-p $(crate)) --lib --tests --features "$(CARGO_FEATURES)" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE)
 
 .PHONY: cargo-test-lib
 cargo-test-lib: export RUST_BACKTRACE=1
@@ -627,18 +598,18 @@ cargo-test-lib:  #-- Run Rust library tests only with high precision
 cargo-test-standard-precision: export RUST_BACKTRACE=1
 cargo-test-standard-precision: check-nextest-installed
 cargo-test-standard-precision:  #-- Run Rust tests with standard precision (debug profile)
-	cargo nextest run --workspace --features "ffi,python" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE)
+	cargo nextest run --workspace --lib --tests --features "ffi,python" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE)
 
 .PHONY: cargo-test-debug
 cargo-test-debug: export RUST_BACKTRACE=1
 cargo-test-debug: check-nextest-installed
 cargo-test-debug:  #-- Run Rust tests with high precision (debug profile)
-	cargo nextest run --workspace --features "ffi,python,high-precision,streaming,defi" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE)
+	cargo nextest run --workspace --lib --tests --features "ffi,python,high-precision,streaming,defi" $(FAIL_FAST_FLAG) --profile $(NEXTEST_PROFILE)
 
 .PHONY: cargo-test-coverage
 cargo-test-coverage: check-nextest-installed check-llvm-cov-installed
 cargo-test-coverage:  #-- Run Rust tests with coverage reporting
-	cargo llvm-cov nextest run --workspace --features "$(CARGO_FEATURES)"
+	cargo llvm-cov nextest run --workspace --lib --tests --features "$(CARGO_FEATURES)"
 
 # -----------------------------------------------------------------------------
 # Library tests for a single crate
@@ -668,7 +639,7 @@ cargo-test-coverage-crate-%:  #-- Run Rust tests with coverage reporting for a s
 .PHONY: cargo-test-coverage-html
 cargo-test-coverage-html: check-nextest-installed check-llvm-cov-installed
 cargo-test-coverage-html:  #-- Run Rust tests with HTML coverage report (opens in browser)
-	cargo llvm-cov nextest --workspace --features "$(CARGO_FEATURES)" --html --open
+	cargo llvm-cov nextest --workspace --lib --tests --features "$(CARGO_FEATURES)" --html --open
 
 .PHONY: cargo-test-coverage-crate-html-%
 cargo-test-coverage-crate-html-%: export RUST_BACKTRACE=1

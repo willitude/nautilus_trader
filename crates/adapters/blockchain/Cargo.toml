@@ -64,7 +64,6 @@ bytes = { workspace = true }
 dotenvy = { workspace = true }
 enum_dispatch = { workspace = true }
 futures-util = { workspace = true }
-hex = { workspace = true }
 log = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
@@ -92,6 +91,7 @@ name = "node_wallet"
 path = "bin/node_wallet.rs"
 required-features = ["hypersync"]
 doc = false
+test = false
 
 [[example]]
 name = "blockchain-data-tester"

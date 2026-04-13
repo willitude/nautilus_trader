@@ -53,7 +53,7 @@ pub enum DataEvent {
 }
 
 /// Execution event variants for order events and reports.
-#[allow(clippy::large_enum_variant)]
+#[expect(clippy::large_enum_variant)]
 #[derive(Debug, Display)]
 pub enum ExecutionEvent {
     Order(OrderEventAny),

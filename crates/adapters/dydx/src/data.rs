@@ -346,6 +346,7 @@ impl DataClient for DydxDataClient {
             .context("failed to subscribe to markets channel")?;
 
         let seen_tickers: Arc<AtomicSet<Ustr>> = Arc::new(AtomicSet::new());
+
         for instrument in self.instrument_cache.all_instruments() {
             let id = instrument.id();
             let ticker = extract_raw_symbol(id.symbol.as_str());
@@ -417,7 +418,9 @@ impl DataClient for DydxDataClient {
     }
 
     fn subscribe_instruments(&mut self, _cmd: &SubscribeInstruments) -> anyhow::Result<()> {
-        log::debug!("subscribe_instruments: dYdX auto-subscribes via markets channel");
+        log::debug!(
+            "subscribe_instruments: dYdX instruments discovered via global v4_markets channel"
+        );
         Ok(())
     }
 

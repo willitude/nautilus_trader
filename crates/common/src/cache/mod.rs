@@ -1051,6 +1051,9 @@ impl Cache {
             if let Some(venue_orders) = self.index.venue_orders.get_mut(&ord.instrument_id().venue)
             {
                 venue_orders.remove(&client_order_id);
+                if venue_orders.is_empty() {
+                    self.index.venue_orders.remove(&ord.instrument_id().venue);
+                }
             }
 
             // Remove venue order ID index if exists
@@ -1063,6 +1066,9 @@ impl Cache {
                 self.index.instrument_orders.get_mut(&ord.instrument_id())
             {
                 instrument_orders.remove(&client_order_id);
+                if instrument_orders.is_empty() {
+                    self.index.instrument_orders.remove(&ord.instrument_id());
+                }
             }
 
             // Remove from position orders index if associated with a position
@@ -1070,6 +1076,9 @@ impl Cache {
                 && let Some(position_orders) = self.index.position_orders.get_mut(&position_id)
             {
                 position_orders.remove(&client_order_id);
+                if position_orders.is_empty() {
+                    self.index.position_orders.remove(&position_id);
+                }
             }
 
             // Remove from exec algorithm orders index if it has an exec algorithm
@@ -1078,6 +1087,9 @@ impl Cache {
                     self.index.exec_algorithm_orders.get_mut(&exec_algorithm_id)
             {
                 exec_algorithm_orders.remove(&client_order_id);
+                if exec_algorithm_orders.is_empty() {
+                    self.index.exec_algorithm_orders.remove(&exec_algorithm_id);
+                }
             }
 
             // Clean up strategy orders reverse index
@@ -1165,6 +1177,9 @@ impl Cache {
                 self.index.venue_positions.get_mut(&pos.instrument_id.venue)
             {
                 venue_positions.remove(&position_id);
+                if venue_positions.is_empty() {
+                    self.index.venue_positions.remove(&pos.instrument_id.venue);
+                }
             }
 
             // Remove from instrument positions index
@@ -1172,6 +1187,9 @@ impl Cache {
                 self.index.instrument_positions.get_mut(&pos.instrument_id)
             {
                 instrument_positions.remove(&position_id);
+                if instrument_positions.is_empty() {
+                    self.index.instrument_positions.remove(&pos.instrument_id);
+                }
             }
 
             // Remove from strategy positions index
@@ -1179,6 +1197,9 @@ impl Cache {
                 self.index.strategy_positions.get_mut(&pos.strategy_id)
             {
                 strategy_positions.remove(&position_id);
+                if strategy_positions.is_empty() {
+                    self.index.strategy_positions.remove(&pos.strategy_id);
+                }
             }
 
             // Remove from account positions index
@@ -2267,6 +2288,7 @@ impl Cache {
     pub fn position_snapshot_ids(&self, instrument_id: &InstrumentId) -> AHashSet<PositionId> {
         // Get snapshot position IDs that match the instrument
         let mut result = AHashSet::new();
+
         for (position_id, _) in &self.position_snapshots {
             // Check if this position is for the requested instrument
             if let Some(position) = self.positions.get(position_id)
@@ -2522,6 +2544,7 @@ impl Cache {
     ) -> AHashSet<ClientOrderId> {
         let query =
             self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
+
         match query {
             Some(query) => self.index.orders.intersection(&query).copied().collect(),
             None => self.index.orders.clone(),
@@ -2539,6 +2562,7 @@ impl Cache {
     ) -> AHashSet<ClientOrderId> {
         let query =
             self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
+
         match query {
             Some(query) => self
                 .index
@@ -2561,6 +2585,7 @@ impl Cache {
     ) -> AHashSet<ClientOrderId> {
         let query =
             self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
+
         match query {
             Some(query) => self
                 .index
@@ -2586,6 +2611,7 @@ impl Cache {
     ) -> AHashSet<ClientOrderId> {
         let query =
             self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
+
         match query {
             Some(query) => self
                 .index
@@ -2608,6 +2634,7 @@ impl Cache {
     ) -> AHashSet<ClientOrderId> {
         let query =
             self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
+
         match query {
             Some(query) => self
                 .index
@@ -2630,6 +2657,7 @@ impl Cache {
     ) -> AHashSet<ClientOrderId> {
         let query =
             self.build_order_query_filter_set(venue, instrument_id, strategy_id, account_id);
+
         match query {
             Some(query) => self
                 .index
@@ -2652,6 +2680,7 @@ impl Cache {
     ) -> AHashSet<PositionId> {
         let query =
             self.build_position_query_filter_set(venue, instrument_id, strategy_id, account_id);
+
         match query {
             Some(query) => self.index.positions.intersection(&query).copied().collect(),
             None => self.index.positions.clone(),
@@ -2669,6 +2698,7 @@ impl Cache {
     ) -> AHashSet<PositionId> {
         let query =
             self.build_position_query_filter_set(venue, instrument_id, strategy_id, account_id);
+
         match query {
             Some(query) => self
                 .index
@@ -2691,6 +2721,7 @@ impl Cache {
     ) -> AHashSet<PositionId> {
         let query =
             self.build_position_query_filter_set(venue, instrument_id, strategy_id, account_id);
+
         match query {
             Some(query) => self
                 .index

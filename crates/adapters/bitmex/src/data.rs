@@ -114,7 +114,7 @@ impl BitmexDataClient {
             Some(config.http_base_url()),
             config.api_key.clone(),
             config.api_secret.clone(),
-            config.use_testnet,
+            config.environment,
             config.http_timeout_secs,
             config.max_retries,
             config.retry_delay_initial_ms,
@@ -242,6 +242,7 @@ impl BitmexDataClient {
                         if !data.is_empty() {
                             let parsed =
                                 parse_book_msg_vec(data, action, instruments_by_symbol, ts_init);
+
                             for d in parsed {
                                 Self::send_data(sender, d);
                             }
@@ -280,6 +281,7 @@ impl BitmexDataClient {
                                 instruments_by_symbol,
                                 ts_init,
                             );
+
                             for d in parsed {
                                 Self::send_data(sender, d);
                             }
@@ -293,6 +295,7 @@ impl BitmexDataClient {
                                 instruments_by_symbol,
                                 ts_init,
                             );
+
                             for d in parsed {
                                 Self::send_data(sender, d);
                             }
@@ -306,6 +309,7 @@ impl BitmexDataClient {
                                 instruments_by_symbol,
                                 ts_init,
                             );
+
                             for d in parsed {
                                 Self::send_data(sender, d);
                             }
@@ -319,6 +323,7 @@ impl BitmexDataClient {
                                 instruments_by_symbol,
                                 ts_init,
                             );
+
                             for d in parsed {
                                 Self::send_data(sender, d);
                             }
@@ -418,6 +423,7 @@ impl BitmexDataClient {
                         m.insert(inst.id(), inst.clone());
                     }
                 });
+
                 for (symbol, inst) in &temp_cache {
                     instruments_by_symbol.insert(*symbol, inst.clone());
                 }
@@ -550,6 +556,7 @@ impl BitmexDataClient {
 
         let handle = get_runtime().spawn(async move {
             let http_client = http_client;
+
             loop {
                 let sleep = tokio::time::sleep(interval);
                 tokio::pin!(sleep);
@@ -600,9 +607,9 @@ impl DataClient for BitmexDataClient {
 
     fn start(&mut self) -> anyhow::Result<()> {
         log::info!(
-            "Starting BitMEX data client: client_id={}, use_testnet={}, http_proxy_url={:?}, ws_proxy_url={:?}",
+            "Starting BitMEX data client: client_id={}, environment={}, http_proxy_url={:?}, ws_proxy_url={:?}",
             self.client_id,
-            self.config.use_testnet,
+            self.config.environment,
             self.config.http_proxy_url,
             self.config.ws_proxy_url,
         );
@@ -643,7 +650,7 @@ impl DataClient for BitmexDataClient {
                 self.config.api_secret.clone(),
                 None,
                 self.config.heartbeat_interval_secs.unwrap_or(5),
-                self.config.use_testnet,
+                self.config.environment,
             )
             .context("failed to construct BitMEX websocket client")?;
             self.ws_client = Some(ws);

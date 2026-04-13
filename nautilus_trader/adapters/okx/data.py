@@ -30,7 +30,9 @@ from nautilus_trader.common.secure import mask_api_key
 from nautilus_trader.core import nautilus_pyo3
 from nautilus_trader.core.correctness import PyCondition
 from nautilus_trader.core.datetime import ensure_pydatetime_utc
+from nautilus_trader.core.nautilus_pyo3 import OKXEnvironment
 from nautilus_trader.data.messages import RequestBars
+from nautilus_trader.data.messages import RequestForwardPrices
 from nautilus_trader.data.messages import RequestFundingRates
 from nautilus_trader.data.messages import RequestInstrument
 from nautilus_trader.data.messages import RequestInstruments
@@ -71,6 +73,7 @@ from nautilus_trader.model.data import capsule_to_data
 from nautilus_trader.model.enums import BookType
 from nautilus_trader.model.enums import book_type_to_str
 from nautilus_trader.model.identifiers import ClientId
+from nautilus_trader.model.identifiers import InstrumentId
 from nautilus_trader.model.instruments import CryptoPerpetual
 from nautilus_trader.model.instruments import Instrument
 
@@ -129,12 +132,19 @@ class OKXDataClient(LiveMarketDataClient):
             [c.name.upper() for c in config.contract_types] if config.contract_types else None
         )
 
+        # Resolve environment: explicit setting takes precedence over is_demo
+        self._environment = (
+            config.environment
+            if config.environment is not None
+            else (OKXEnvironment.DEMO if config.is_demo else OKXEnvironment.LIVE)
+        )
+
         # Configuration
         self._config = config
         self._log.info(f"config.instrument_types={instrument_types}", LogColor.BLUE)
         self._log.info(f"{config.instrument_families=}", LogColor.BLUE)
         self._log.info(f"config.contract_types={contract_types}", LogColor.BLUE)
-        self._log.info(f"{config.is_demo=}", LogColor.BLUE)
+        self._log.info(f"environment={self._environment}", LogColor.BLUE)
         self._log.info(f"{config.http_timeout_secs=}", LogColor.BLUE)
         self._log.info(f"{config.max_retries=}", LogColor.BLUE)
         self._log.info(f"{config.retry_delay_initial_ms=}", LogColor.BLUE)
@@ -152,7 +162,7 @@ class OKXDataClient(LiveMarketDataClient):
 
         # WebSocket API
         self._ws_client = nautilus_pyo3.OKXWebSocketClient(
-            url=config.base_url_ws or nautilus_pyo3.get_okx_ws_url_public(config.is_demo),
+            url=config.base_url_ws or nautilus_pyo3.get_okx_ws_url_public(self._environment),
             api_key=None,
             api_secret=None,
             api_passphrase=None,
@@ -160,9 +170,10 @@ class OKXDataClient(LiveMarketDataClient):
         )
         self._ws_client_futures: set[asyncio.Future] = set()
         self._option_summary_family_subs: dict[str, int] = {}
+        self._option_greeks_instrument_ids: set[InstrumentId] = set()
 
         # WebSocket API for business data (bars/candlesticks)
-        _public_url = config.base_url_ws or nautilus_pyo3.get_okx_ws_url_public(config.is_demo)
+        _public_url = config.base_url_ws or nautilus_pyo3.get_okx_ws_url_public(self._environment)
         self._ws_business_client = nautilus_pyo3.OKXWebSocketClient(
             url=nautilus_pyo3.derive_okx_ws_url(_public_url, "business"),
             api_key=config.api_key,
@@ -352,6 +363,7 @@ class OKXDataClient(LiveMarketDataClient):
         inst_family = f"{parts[0]}-{parts[1]}"
 
         self._ws_client.add_option_greeks_sub(pyo3_instrument_id)  # type: ignore[attr-defined]
+        self._option_greeks_instrument_ids.add(command.instrument_id)
 
         count = self._option_summary_family_subs.get(inst_family, 0)
         self._option_summary_family_subs[inst_family] = count + 1
@@ -361,6 +373,7 @@ class OKXDataClient(LiveMarketDataClient):
                 await self._ws_client.subscribe_option_summary(inst_family)  # type: ignore[attr-defined]
             except Exception:
                 self._ws_client.remove_option_greeks_sub(pyo3_instrument_id)  # type: ignore[attr-defined]
+                self._option_greeks_instrument_ids.discard(command.instrument_id)
                 self._option_summary_family_subs[inst_family] -= 1
                 if self._option_summary_family_subs[inst_family] <= 0:
                     del self._option_summary_family_subs[inst_family]
@@ -418,6 +431,10 @@ class OKXDataClient(LiveMarketDataClient):
 
         pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(command.instrument_id.value)
         await self._ws_client.unsubscribe_funding_rates(pyo3_instrument_id)
+
+    def unsubscribe_option_greeks(self, command: UnsubscribeOptionGreeks) -> None:
+        self._option_greeks_instrument_ids.discard(command.instrument_id)
+        super().unsubscribe_option_greeks(command)
 
     async def _unsubscribe_option_greeks(self, command: UnsubscribeOptionGreeks) -> None:
         pyo3_instrument_id = nautilus_pyo3.InstrumentId.from_str(command.instrument_id.value)
@@ -490,6 +507,7 @@ class OKXDataClient(LiveMarketDataClient):
                 family,
             )
             instruments = []
+
             for pyo3_instrument in pyo3_instruments:
                 self._cache_instrument(pyo3_instrument)  # type: ignore[arg-type]
                 instrument = transform_instrument_from_pyo3(pyo3_instrument)
@@ -652,6 +670,28 @@ class OKXDataClient(LiveMarketDataClient):
             request.params,
         )
 
+    async def _request_forward_prices(self, request: RequestForwardPrices) -> None:
+        sample_id = request.sample_instrument_id
+        pyo3_inst_id = None
+
+        if sample_id is not None:
+            pyo3_inst_id = nautilus_pyo3.InstrumentId.from_str(str(sample_id))
+
+        try:
+            forward_prices = await self._http_client.request_forward_prices(  # type: ignore[attr-defined]
+                underlying=request.underlying,
+                instrument_id=pyo3_inst_id,
+            )
+        except Exception as e:
+            self._log.error(f"Failed to request forward prices for {request.underlying}: {e}")
+            self._handle_forward_prices([], request.id, request.params or {})
+            return
+
+        self._log.info(
+            f"Received {len(forward_prices)} forward prices for {request.underlying}",
+        )
+        self._handle_forward_prices(forward_prices, request.id, request.params or {})
+
     # -- WEBSOCKET HANDLERS -----------------------------------------------------------------------
 
     def _handle_msg(self, msg: Any) -> None:
@@ -672,7 +712,7 @@ class OKXDataClient(LiveMarketDataClient):
                 self._handle_data(FundingRateUpdate.from_pyo3(msg))
             elif isinstance(msg, nautilus_pyo3.OptionGreeks):
                 greeks = OptionGreeks.from_pyo3(msg)
-                if greeks.instrument_id in self._subscriptions_option_greeks:
+                if greeks.instrument_id in self._option_greeks_instrument_ids:
                     self._handle_data(greeks)
             else:
                 self._log.error(f"Cannot handle message {msg}, not implemented")

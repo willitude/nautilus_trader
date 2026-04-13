@@ -15,15 +15,25 @@
 
 //! Defines the Apache Arrow schema for Nautilus types.
 
+pub mod account_state;
 pub mod bar;
 pub mod close;
 pub mod custom;
 pub mod delta;
 pub mod depth;
+#[cfg(feature = "display")]
+pub mod display;
+pub mod funding;
 pub mod index_price;
 pub mod instrument;
+pub mod instrument_status;
+pub mod json;
 pub mod mark_price;
+pub mod order_event;
+pub mod position_event;
 pub mod quote;
+pub mod report;
+pub mod snapshot;
 pub mod trade;
 
 use std::{
@@ -247,6 +257,7 @@ pub trait ArrowSchemaProvider {
     fn get_schema_map() -> HashMap<String, String> {
         let schema = Self::get_schema(None);
         let mut map = HashMap::new();
+
         for field in schema.fields() {
             let name = field.name().clone();
             let data_type = format!("{:?}", field.data_type());
@@ -301,6 +312,34 @@ where
         metadata: &HashMap<String, String>,
         record_batch: RecordBatch,
     ) -> Result<Vec<Self>, EncodingError>;
+}
+
+/// Decodes strongly typed values from Apache Arrow RecordBatch format.
+pub trait DecodeTypedFromRecordBatch
+where
+    Self: Sized + ArrowSchemaProvider,
+{
+    /// Decodes a `RecordBatch` into a vector of values of the implementing type.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `EncodingError` if the decoding fails.
+    fn decode_typed_batch(
+        metadata: &HashMap<String, String>,
+        record_batch: RecordBatch,
+    ) -> Result<Vec<Self>, EncodingError>;
+}
+
+impl<T> DecodeTypedFromRecordBatch for T
+where
+    T: DecodeFromRecordBatch,
+{
+    fn decode_typed_batch(
+        metadata: &HashMap<String, String>,
+        record_batch: RecordBatch,
+    ) -> Result<Vec<Self>, EncodingError> {
+        Self::decode_batch(metadata, record_batch)
+    }
 }
 
 /// Decodes raw Data objects from Apache Arrow RecordBatch format.
@@ -466,7 +505,7 @@ pub fn book_deltas_to_arrow_record_batch_bytes(
 /// Returns an error if:
 /// - `data` is empty: `EncodingError::EmptyData`.
 /// - Encoding fails: `EncodingError::ArrowError`.
-#[allow(clippy::missing_panics_doc)] // Guarded by empty check
+#[expect(clippy::missing_panics_doc)] // Guarded by empty check
 pub fn book_depth10_to_arrow_record_batch_bytes(
     data: &[OrderBookDepth10],
 ) -> Result<RecordBatch, EncodingError> {
@@ -487,7 +526,7 @@ pub fn book_depth10_to_arrow_record_batch_bytes(
 /// Returns an error if:
 /// - `data` is empty: `EncodingError::EmptyData`.
 /// - Encoding fails: `EncodingError::ArrowError`.
-#[allow(clippy::missing_panics_doc)] // Guarded by empty check
+#[expect(clippy::missing_panics_doc)] // Guarded by empty check
 pub fn quotes_to_arrow_record_batch_bytes(
     data: &[QuoteTick],
 ) -> Result<RecordBatch, EncodingError> {
@@ -508,7 +547,7 @@ pub fn quotes_to_arrow_record_batch_bytes(
 /// Returns an error if:
 /// - `data` is empty: `EncodingError::EmptyData`.
 /// - Encoding fails: `EncodingError::ArrowError`.
-#[allow(clippy::missing_panics_doc)] // Guarded by empty check
+#[expect(clippy::missing_panics_doc)] // Guarded by empty check
 pub fn trades_to_arrow_record_batch_bytes(
     data: &[TradeTick],
 ) -> Result<RecordBatch, EncodingError> {
@@ -529,7 +568,7 @@ pub fn trades_to_arrow_record_batch_bytes(
 /// Returns an error if:
 /// - `data` is empty: `EncodingError::EmptyData`.
 /// - Encoding fails: `EncodingError::ArrowError`.
-#[allow(clippy::missing_panics_doc)] // Guarded by empty check
+#[expect(clippy::missing_panics_doc)] // Guarded by empty check
 pub fn bars_to_arrow_record_batch_bytes(data: &[Bar]) -> Result<RecordBatch, EncodingError> {
     if data.is_empty() {
         return Err(EncodingError::EmptyData);
@@ -548,7 +587,7 @@ pub fn bars_to_arrow_record_batch_bytes(data: &[Bar]) -> Result<RecordBatch, Enc
 /// Returns an error if:
 /// - `data` is empty: `EncodingError::EmptyData`.
 /// - Encoding fails: `EncodingError::ArrowError`.
-#[allow(clippy::missing_panics_doc)] // Guarded by empty check
+#[expect(clippy::missing_panics_doc)] // Guarded by empty check
 pub fn mark_prices_to_arrow_record_batch_bytes(
     data: &[MarkPriceUpdate],
 ) -> Result<RecordBatch, EncodingError> {
@@ -569,7 +608,7 @@ pub fn mark_prices_to_arrow_record_batch_bytes(
 /// Returns an error if:
 /// - `data` is empty: `EncodingError::EmptyData`.
 /// - Encoding fails: `EncodingError::ArrowError`.
-#[allow(clippy::missing_panics_doc)] // Guarded by empty check
+#[expect(clippy::missing_panics_doc)] // Guarded by empty check
 pub fn index_prices_to_arrow_record_batch_bytes(
     data: &[IndexPriceUpdate],
 ) -> Result<RecordBatch, EncodingError> {
@@ -590,7 +629,7 @@ pub fn index_prices_to_arrow_record_batch_bytes(
 /// Returns an error if:
 /// - `data` is empty: `EncodingError::EmptyData`.
 /// - Encoding fails: `EncodingError::ArrowError`.
-#[allow(clippy::missing_panics_doc)] // Guarded by empty check
+#[expect(clippy::missing_panics_doc)] // Guarded by empty check
 pub fn instrument_closes_to_arrow_record_batch_bytes(
     data: &[InstrumentClose],
 ) -> Result<RecordBatch, EncodingError> {

@@ -32,7 +32,7 @@ use nautilus_common::live::get_runtime;
 use nautilus_core::{AtomicMap, AtomicSet, UUID4, consts::NAUTILUS_USER_AGENT};
 use nautilus_model::{
     data::BarType,
-    enums::{AggregationSource, OrderSide, OrderType, PriceType, TimeInForce},
+    enums::{AggregationSource, OrderSide, OrderType, PriceType, TimeInForce, TriggerType},
     identifiers::{AccountId, ClientOrderId, InstrumentId, StrategyId, TraderId, VenueOrderId},
     instruments::{Instrument, InstrumentAny},
     types::{Price, Quantity},
@@ -55,7 +55,7 @@ use crate::{
         credential::Credential,
         enums::{
             BybitEnvironment, BybitOrderSide, BybitOrderType, BybitProductType, BybitTimeInForce,
-            BybitTpSlMode, BybitTriggerType, BybitWsOrderRequestOp,
+            BybitTpSlMode, BybitWsOrderRequestOp, resolve_trigger_type,
         },
         parse::{
             bar_spec_to_bybit_interval, extract_base_coin, extract_raw_symbol, map_time_in_force,
@@ -79,6 +79,7 @@ use crate::{
 };
 
 const WEBSOCKET_AUTH_WINDOW_MS: i64 = 5_000;
+const AUTH_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const BATCH_PROCESSING_LIMIT: usize = 20;
 
 /// Tracks a pending Python execution request for OrderResponse correlation.
@@ -427,6 +428,7 @@ impl BybitWebSocketClient {
         };
 
         self.connection_mode.store(client.connection_mode_atomic());
+        client.set_auth_tracker(self.auth_tracker.clone(), self.requires_auth);
 
         let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel::<BybitWsMessage>();
         self.out_rx = Some(Arc::new(out_rx));
@@ -506,6 +508,7 @@ impl BybitWebSocketClient {
                         let confirmed_topics: Vec<String> = {
                             let confirmed = subscriptions.confirmed();
                             let mut topics = Vec::new();
+
                             for entry in confirmed.iter() {
                                 let (channel, symbols) = entry.pair();
                                 for symbol in symbols {
@@ -524,6 +527,7 @@ impl BybitWebSocketClient {
                                 "Marking confirmed subscriptions as pending for replay: count={}",
                                 confirmed_topics.len()
                             );
+
                             for topic in confirmed_topics {
                                 subscriptions.mark_failure(&topic);
                             }
@@ -1187,17 +1191,52 @@ impl BybitWebSocketClient {
             .await
     }
 
+    /// Waits for the session to be authenticated, aborting early if the client
+    /// enters a terminal state (closed or disconnecting) during the wait.
+    async fn require_authenticated(&self) -> BybitWsResult<()> {
+        if self.is_closed() {
+            return Err(BybitWsError::ClientError(
+                "WebSocket client is closed".to_string(),
+            ));
+        }
+
+        if self.auth_tracker.is_authenticated() {
+            return Ok(());
+        }
+
+        tokio::select! {
+            authenticated = self.auth_tracker.wait_for_authenticated(AUTH_WAIT_TIMEOUT) => {
+                if authenticated {
+                    Ok(())
+                } else {
+                    Err(BybitWsError::Authentication(
+                        "Must be authenticated".to_string(),
+                    ))
+                }
+            }
+            () = async {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+
+                    if self.is_closed() {
+                        return;
+                    }
+                }
+            } => {
+                Err(BybitWsError::ClientError(
+                    "WebSocket client closed during authentication wait".to_string(),
+                ))
+            }
+        }
+    }
+
     /// Places an order via WebSocket, returning the request ID for correlation.
     ///
     /// # Errors
     ///
     /// Returns an error if the order request fails or if not authenticated.
     pub async fn place_order(&self, params: BybitWsPlaceOrderParams) -> BybitWsResult<String> {
-        if !self.auth_tracker.is_authenticated() {
-            return Err(BybitWsError::Authentication(
-                "Must be authenticated to place orders".to_string(),
-            ));
-        }
+        self.require_authenticated().await?;
 
         let req_id = UUID4::new().to_string();
 
@@ -1226,11 +1265,7 @@ impl BybitWebSocketClient {
     ///
     /// Returns an error if the amend request fails or if not authenticated.
     pub async fn amend_order(&self, params: BybitWsAmendOrderParams) -> BybitWsResult<String> {
-        if !self.auth_tracker.is_authenticated() {
-            return Err(BybitWsError::Authentication(
-                "Must be authenticated to amend orders".to_string(),
-            ));
-        }
+        self.require_authenticated().await?;
 
         let req_id = UUID4::new().to_string();
 
@@ -1253,11 +1288,7 @@ impl BybitWebSocketClient {
     ///
     /// Returns an error if the cancel request fails or if not authenticated.
     pub async fn cancel_order(&self, params: BybitWsCancelOrderParams) -> BybitWsResult<String> {
-        if !self.auth_tracker.is_authenticated() {
-            return Err(BybitWsError::Authentication(
-                "Must be authenticated to cancel orders".to_string(),
-            ));
-        }
+        self.require_authenticated().await?;
 
         let req_id = UUID4::new().to_string();
 
@@ -1283,11 +1314,7 @@ impl BybitWebSocketClient {
         &self,
         orders: Vec<BybitWsPlaceOrderParams>,
     ) -> BybitWsResult<Vec<String>> {
-        if !self.auth_tracker.is_authenticated() {
-            return Err(BybitWsError::Authentication(
-                "Must be authenticated to place orders".to_string(),
-            ));
-        }
+        self.require_authenticated().await?;
 
         if orders.is_empty() {
             log::warn!("Batch place orders called with empty orders list");
@@ -1295,6 +1322,7 @@ impl BybitWebSocketClient {
         }
 
         let mut req_ids = Vec::new();
+
         for chunk in orders.chunks(BATCH_PROCESSING_LIMIT) {
             let req_id = self.batch_place_orders_chunk(chunk.to_vec()).await?;
             req_ids.push(req_id);
@@ -1380,11 +1408,7 @@ impl BybitWebSocketClient {
         &self,
         orders: Vec<BybitWsAmendOrderParams>,
     ) -> BybitWsResult<Vec<String>> {
-        if !self.auth_tracker.is_authenticated() {
-            return Err(BybitWsError::Authentication(
-                "Must be authenticated to amend orders".to_string(),
-            ));
-        }
+        self.require_authenticated().await?;
 
         if orders.is_empty() {
             log::warn!("Batch amend orders called with empty orders list");
@@ -1392,6 +1416,7 @@ impl BybitWebSocketClient {
         }
 
         let mut req_ids = Vec::new();
+
         for chunk in orders.chunks(BATCH_PROCESSING_LIMIT) {
             let req_id = self.batch_amend_orders_chunk(chunk.to_vec()).await?;
             req_ids.push(req_id);
@@ -1428,11 +1453,7 @@ impl BybitWebSocketClient {
         &self,
         orders: Vec<BybitWsCancelOrderParams>,
     ) -> BybitWsResult<Vec<String>> {
-        if !self.auth_tracker.is_authenticated() {
-            return Err(BybitWsError::Authentication(
-                "Must be authenticated to cancel orders".to_string(),
-            ));
-        }
+        self.require_authenticated().await?;
 
         if orders.is_empty() {
             log::warn!("Batch cancel orders called with empty orders list");
@@ -1440,6 +1461,7 @@ impl BybitWebSocketClient {
         }
 
         let mut req_ids = Vec::new();
+
         for chunk in orders.chunks(BATCH_PROCESSING_LIMIT) {
             let req_id = self.batch_cancel_orders_chunk(chunk.to_vec()).await?;
             req_ids.push(req_id);
@@ -1491,7 +1513,7 @@ impl BybitWebSocketClient {
     /// # Errors
     ///
     /// Returns an error if order submission fails or if not authenticated.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn submit_order(
         &self,
         product_type: BybitProductType,
@@ -1504,6 +1526,7 @@ impl BybitWebSocketClient {
         time_in_force: Option<TimeInForce>,
         price: Option<Price>,
         trigger_price: Option<Price>,
+        trigger_type: Option<TriggerType>,
         post_only: Option<bool>,
         reduce_only: Option<bool>,
         is_leverage: bool,
@@ -1519,6 +1542,7 @@ impl BybitWebSocketClient {
             time_in_force,
             price,
             trigger_price,
+            trigger_type,
             post_only,
             reduce_only,
             is_leverage,
@@ -1534,7 +1558,6 @@ impl BybitWebSocketClient {
     /// # Errors
     ///
     /// Returns an error if modification fails or if not authenticated.
-    #[allow(clippy::too_many_arguments)]
     pub async fn modify_order(
         &self,
         product_type: BybitProductType,
@@ -1579,7 +1602,7 @@ impl BybitWebSocketClient {
     }
 
     /// Builds order params for placing an order.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn build_place_order_params(
         &self,
         product_type: BybitProductType,
@@ -1592,6 +1615,7 @@ impl BybitWebSocketClient {
         time_in_force: Option<TimeInForce>,
         price: Option<Price>,
         trigger_price: Option<Price>,
+        trigger_type: Option<TriggerType>,
         post_only: Option<bool>,
         reduce_only: Option<bool>,
         is_leverage: bool,
@@ -1648,7 +1672,7 @@ impl BybitWebSocketClient {
                 reduce_only: reduce_only.filter(|&r| r),
                 close_on_trigger: None,
                 trigger_price: trigger_price.map(|p| p.to_string()),
-                trigger_by: Some(BybitTriggerType::LastPrice),
+                trigger_by: Some(resolve_trigger_type(trigger_type)),
                 trigger_direction: trigger_dir,
                 tpsl_mode: if take_profit.is_some() || stop_loss.is_some() {
                     Some(BybitTpSlMode::Full)
@@ -1657,8 +1681,8 @@ impl BybitWebSocketClient {
                 },
                 take_profit: take_profit.map(|p| p.to_string()),
                 stop_loss: stop_loss.map(|p| p.to_string()),
-                tp_trigger_by: take_profit.map(|_| BybitTriggerType::LastPrice),
-                sl_trigger_by: stop_loss.map(|_| BybitTriggerType::LastPrice),
+                tp_trigger_by: take_profit.map(|_| resolve_trigger_type(trigger_type)),
+                sl_trigger_by: stop_loss.map(|_| resolve_trigger_type(trigger_type)),
                 sl_trigger_price: None,
                 tp_trigger_price: None,
                 sl_order_type: None,
@@ -1692,8 +1716,8 @@ impl BybitWebSocketClient {
                 },
                 take_profit: take_profit.map(|p| p.to_string()),
                 stop_loss: stop_loss.map(|p| p.to_string()),
-                tp_trigger_by: take_profit.map(|_| BybitTriggerType::LastPrice),
-                sl_trigger_by: stop_loss.map(|_| BybitTriggerType::LastPrice),
+                tp_trigger_by: take_profit.map(|_| resolve_trigger_type(trigger_type)),
+                sl_trigger_by: stop_loss.map(|_| resolve_trigger_type(trigger_type)),
                 sl_trigger_price: None,
                 tp_trigger_price: None,
                 sl_order_type: None,
@@ -1709,7 +1733,6 @@ impl BybitWebSocketClient {
     }
 
     /// Builds order params for amending an order.
-    #[allow(clippy::too_many_arguments)]
     pub fn build_amend_order_params(
         &self,
         product_type: BybitProductType,
@@ -2044,6 +2067,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 is_leverage,
                 None,
                 None,
@@ -2110,6 +2134,7 @@ mod tests {
                 } else {
                     Some(Price::from("50000.0"))
                 },
+                None,
                 None,
                 None,
                 None,

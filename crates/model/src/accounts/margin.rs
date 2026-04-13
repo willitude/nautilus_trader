@@ -36,7 +36,7 @@ use std::{
 };
 
 use ahash::AHashMap;
-use nautilus_core::correctness::{FAILED, check_positive_decimal};
+use nautilus_core::correctness::{CorrectnessResultExt, FAILED, check_positive_decimal};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -74,6 +74,7 @@ pub struct MarginAccount {
 
 impl MarginAccount {
     /// Creates a new [`MarginAccount`] instance.
+    #[must_use]
     pub fn new(event: AccountState, calculate_account_state: bool) -> Self {
         let margins = event
             .margins
@@ -105,7 +106,7 @@ impl MarginAccount {
     ///
     /// Panics if `leverage` is not positive.
     pub fn set_default_leverage(&mut self, leverage: Decimal) {
-        check_positive_decimal(leverage, "leverage").expect(FAILED);
+        check_positive_decimal(leverage, "leverage").expect_display(FAILED);
         self.default_leverage = leverage;
     }
 
@@ -115,7 +116,7 @@ impl MarginAccount {
     ///
     /// Panics if `leverage` is not positive.
     pub fn set_leverage(&mut self, instrument_id: InstrumentId, leverage: Decimal) {
-        check_positive_decimal(leverage, "leverage").expect(FAILED);
+        check_positive_decimal(leverage, "leverage").expect_display(FAILED);
         self.leverages.insert(instrument_id, leverage);
     }
 
@@ -312,17 +313,17 @@ impl MarginAccount {
     /// This function panics if:
     /// - Margin calculation overflows.
     pub fn recalculate_balance(&mut self, currency: Currency) {
-        let current_balance = match self.balances.get(&currency) {
-            Some(balance) => *balance,
-            None => {
-                // Initialize zero balance if none exists - can occur when account
-                // state doesn't include a balance for the position's cost currency
-                let zero = Money::from_raw(0, currency);
-                AccountBalance::new(zero, zero, zero)
-            }
+        let current_balance = if let Some(balance) = self.balances.get(&currency) {
+            *balance
+        } else {
+            // Initialize zero balance if none exists - can occur when account
+            // state doesn't include a balance for the position's cost currency
+            let zero = Money::from_raw(0, currency);
+            AccountBalance::new(zero, zero, zero)
         };
 
         let mut total_margin: MoneyRaw = 0;
+
         for margin in self.margins.values() {
             if margin.currency == currency {
                 total_margin = total_margin

@@ -98,7 +98,7 @@ fn create_order_book_depth10(ts_init: u64) -> OrderBookDepth10 {
     let mut quantity = 100.0;
     let mut order_id = 1;
 
-    #[allow(clippy::needless_range_loop)]
+    #[expect(clippy::needless_range_loop)]
     for i in 0..DEPTH10_LEN {
         let order = BookOrder::new(
             OrderSide::Buy,
@@ -119,7 +119,7 @@ fn create_order_book_depth10(ts_init: u64) -> OrderBookDepth10 {
     quantity = 100.0;
     order_id = 11;
 
-    #[allow(clippy::needless_range_loop)]
+    #[expect(clippy::needless_range_loop)]
     for i in 0..DEPTH10_LEN {
         let order = BookOrder::new(
             OrderSide::Sell,
@@ -1397,6 +1397,7 @@ fn test_generic_consolidate_data_by_period_bars() {
 
     // Create multiple small files with contiguous timestamps
     let mut bars_list = Vec::new();
+
     for i in 0..3 {
         let bars = vec![create_bar(1000 + i)];
         bars_list.push(bars[0]);
@@ -1453,6 +1454,7 @@ fn test_generic_consolidate_data_by_period_with_time_range() {
         create_quote_tick(5000),
         create_quote_tick(10000),
     ];
+
     for quote in quotes {
         catalog
             .write_to_parquet(vec![quote], None, None, None)
@@ -1483,6 +1485,7 @@ fn test_consolidation_workflow_end_to_end() {
 
     // Create multiple small files
     let mut bars_list = Vec::new();
+
     for i in 0..5 {
         let bars = vec![create_bar(1000 + i * 1000)];
         bars_list.push(bars[0]);
@@ -1745,7 +1748,7 @@ fn test_prepare_consolidation_queries_basic_moved() {
 }
 
 #[rstest]
-#[allow(clippy::needless_collect)] // Collect needed for .len() and .iter().find()
+#[expect(clippy::needless_collect)] // Collect needed for .len() and .iter().find()
 fn test_prepare_consolidation_queries_with_splits_moved() {
     let tmp = tempfile::tempdir().unwrap();
     let base_dir = tmp.path().join("catalog");
@@ -2683,6 +2686,7 @@ fn test_catalog_query_multiple_instruments_table_naming() {
 
     // Verify we have data from all three instruments
     let mut instrument_counts = HashMap::new();
+
     for item in &data {
         if let Data::Quote(quote) = item {
             *instrument_counts

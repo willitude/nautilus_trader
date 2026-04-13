@@ -27,6 +27,7 @@ from nautilus_trader.common.enums import LogColor
 from nautilus_trader.common.enums import LogLevel
 from nautilus_trader.common.secure import mask_api_key
 from nautilus_trader.core import nautilus_pyo3
+from nautilus_trader.core.nautilus_pyo3 import DeribitEnvironment
 from nautilus_trader.execution.messages import BatchCancelOrders
 from nautilus_trader.execution.messages import CancelAllOrders
 from nautilus_trader.execution.messages import CancelOrder
@@ -57,6 +58,7 @@ from nautilus_trader.model.events import OrderUpdated
 from nautilus_trader.model.functions import order_side_to_pyo3
 from nautilus_trader.model.functions import order_type_to_pyo3
 from nautilus_trader.model.functions import time_in_force_to_pyo3
+from nautilus_trader.model.functions import trigger_type_to_pyo3
 from nautilus_trader.model.identifiers import AccountId
 from nautilus_trader.model.identifiers import ClientId
 from nautilus_trader.model.identifiers import ClientOrderId
@@ -118,8 +120,13 @@ class DeribitExecutionClient(LiveExecutionClient):
         product_types = (
             [i.name.upper() for i in config.product_types] if config.product_types else None
         )
+        environment = (
+            config.environment
+            if config.environment is not None
+            else (DeribitEnvironment.TESTNET if config.is_testnet else DeribitEnvironment.MAINNET)
+        )
         self._log.info(f"config.product_types={product_types}", LogColor.BLUE)
-        self._log.info(f"{config.is_testnet=}", LogColor.BLUE)
+        self._log.info(f"config.environment={environment}", LogColor.BLUE)
         self._log.info(f"{config.http_timeout_secs=}", LogColor.BLUE)
         self._log.info(f"{config.max_retries=}", LogColor.BLUE)
         self._log.info(f"{config.retry_delay_initial_ms=}", LogColor.BLUE)
@@ -132,7 +139,7 @@ class DeribitExecutionClient(LiveExecutionClient):
         self.pyo3_account_id = nautilus_pyo3.AccountId(account_id.value)
         self._http_client = http_client
         self._ws_client = nautilus_pyo3.DeribitWebSocketClient.with_credentials(
-            is_testnet=config.is_testnet,
+            environment=environment,
             account_id=self.pyo3_account_id,
         )
 
@@ -367,6 +374,14 @@ class DeribitExecutionClient(LiveExecutionClient):
             )
 
             pyo3_order_side = order_side_to_pyo3(order.side)
+            pyo3_trigger_price = (
+                nautilus_pyo3.Price.from_str(str(order.trigger_price))
+                if order.has_trigger_price
+                else None
+            )
+            pyo3_trigger_type = (
+                trigger_type_to_pyo3(order.trigger_type) if order.has_trigger_price else None
+            )
             await self._ws_client.submit_order(
                 order_side=pyo3_order_side,
                 quantity=pyo3_quantity,
@@ -379,6 +394,8 @@ class DeribitExecutionClient(LiveExecutionClient):
                 time_in_force=pyo3_time_in_force,
                 post_only=order.is_post_only,
                 reduce_only=order.is_reduce_only,
+                trigger_price=pyo3_trigger_price,
+                trigger_type=pyo3_trigger_type,
             )
         except Exception as e:
             self._log.error(f"Failed to submit order: {e}")
@@ -436,6 +453,14 @@ class DeribitExecutionClient(LiveExecutionClient):
                 )
 
                 pyo3_order_side = order_side_to_pyo3(order.side)
+                pyo3_trigger_price = (
+                    nautilus_pyo3.Price.from_str(str(order.trigger_price))
+                    if order.has_trigger_price
+                    else None
+                )
+                pyo3_trigger_type = (
+                    trigger_type_to_pyo3(order.trigger_type) if order.has_trigger_price else None
+                )
                 await self._ws_client.submit_order(
                     order_side=pyo3_order_side,
                     quantity=pyo3_quantity,
@@ -448,6 +473,8 @@ class DeribitExecutionClient(LiveExecutionClient):
                     time_in_force=pyo3_time_in_force,
                     post_only=order.is_post_only,
                     reduce_only=order.is_reduce_only,
+                    trigger_price=pyo3_trigger_price,
+                    trigger_type=pyo3_trigger_type,
                 )
             except Exception as e:
                 self._log.error(f"Failed to submit order from list: {e}")

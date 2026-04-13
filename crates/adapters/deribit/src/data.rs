@@ -110,7 +110,7 @@ impl DeribitDataClient {
                 config.api_key.clone(),
                 config.api_secret.clone(),
                 config.base_url_http.clone(),
-                config.use_testnet,
+                config.environment,
                 config.http_timeout_secs,
                 config.max_retries,
                 config.retry_delay_initial_ms,
@@ -120,7 +120,7 @@ impl DeribitDataClient {
         } else {
             DeribitHttpClient::new(
                 config.base_url_http.clone(),
-                config.use_testnet,
+                config.environment,
                 config.http_timeout_secs,
                 config.max_retries,
                 config.retry_delay_initial_ms,
@@ -134,7 +134,7 @@ impl DeribitDataClient {
             config.api_key.clone(),
             config.api_secret.clone(),
             config.heartbeat_interval_secs,
-            config.use_testnet,
+            config.environment,
         )?;
 
         Ok(Self {
@@ -262,6 +262,7 @@ impl DeribitDataClient {
                     "Received {} funding rate update(s) from WebSocket",
                     funding_rates.len()
                 );
+
                 for funding_rate in funding_rates {
                     log::debug!("Sending funding rate: {funding_rate:?}");
                     if let Err(e) = sender.send(DataEvent::FundingRate(funding_rate)) {
@@ -352,9 +353,9 @@ impl DataClient for DeribitDataClient {
 
     fn start(&mut self) -> anyhow::Result<()> {
         log::info!(
-            "Starting data client: client_id={}, use_testnet={}",
+            "Starting data client: client_id={}, environment={}",
             self.client_id,
-            self.config.use_testnet
+            self.config.environment
         );
         Ok(())
     }
@@ -372,6 +373,7 @@ impl DataClient for DeribitDataClient {
 
         // Cancel running stream tasks before replacing the token
         self.cancellation_token.cancel();
+
         for handle in self.tasks.drain(..) {
             handle.abort();
         }
@@ -407,6 +409,7 @@ impl DataClient for DeribitDataClient {
         };
 
         let mut all_instruments = Vec::new();
+
         for product_type in &product_types {
             let fetched = self
                 .http_client
@@ -471,12 +474,7 @@ impl DataClient for DeribitDataClient {
         self.spawn_stream_task(stream);
 
         self.is_connected.store(true, Ordering::Release);
-        let network = if self.config.use_testnet {
-            "testnet"
-        } else {
-            "mainnet"
-        };
-        log_info!("Connected ({})", network);
+        log_info!("Connected ({})", self.config.environment);
         Ok(())
     }
 
@@ -1272,6 +1270,7 @@ impl DataClient for DeribitDataClient {
 
         get_runtime().spawn(async move {
             let mut all_instruments = Vec::new();
+
             for product_type in &product_types {
                 log::debug!(
                     "Requesting instruments for currency=ANY, product_type={product_type:?}"

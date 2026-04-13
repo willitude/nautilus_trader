@@ -298,7 +298,7 @@ impl OKXWebSocketClient {
     }
 
     #[pyo3(name = "connect")]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn py_connect<'py>(
         &mut self,
         py: Python<'py>,
@@ -309,6 +309,7 @@ impl OKXWebSocketClient {
         let call_soon: Py<PyAny> = loop_.getattr(py, "call_soon_threadsafe")?;
 
         let mut instruments_any = Vec::new();
+
         for inst in instruments {
             let inst_any = pyobject_to_instrument_any(py, inst)?;
             instruments_any.push(inst_any);
@@ -1113,7 +1114,7 @@ impl OKXWebSocketClient {
         px_usd=None,
         px_vol=None,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_submit_order<'py>(
         &self,
         py: Python<'py>,
@@ -1173,7 +1174,6 @@ impl OKXWebSocketClient {
         client_order_id=None,
         venue_order_id=None,
     ))]
-    #[allow(clippy::too_many_arguments)]
     fn py_cancel_order<'py>(
         &self,
         py: Python<'py>,
@@ -1211,7 +1211,7 @@ impl OKXWebSocketClient {
         new_px_usd=None,
         new_px_vol=None,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_modify_order<'py>(
         &self,
         py: Python<'py>,
@@ -1245,7 +1245,7 @@ impl OKXWebSocketClient {
         })
     }
 
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     #[pyo3(name = "batch_submit_orders")]
     fn py_batch_submit_orders<'py>(
         &self,
@@ -1439,6 +1439,7 @@ fn handle_book_data(
         return;
     };
     let ts_init = clock.get_time_ns();
+
     match parse_book_msg_vec(
         data,
         &instrument.id(),
@@ -1457,7 +1458,7 @@ fn handle_book_data(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_channel_data(
     channel: &OKXWsChannel,
     inst_id: Option<Ustr>,
@@ -1472,6 +1473,7 @@ fn handle_channel_data(
 ) {
     if matches!(channel, OKXWsChannel::OptionSummary) {
         let ts_init = clock.get_time_ns();
+
         match serde_json::from_value::<Vec<OKXOptionSummaryMsg>>(data) {
             Ok(msgs) => {
                 for msg in &msgs {
@@ -1482,6 +1484,7 @@ fn handle_channel_data(
                     if !option_greeks_subs.contains(&instrument_id) {
                         continue;
                     }
+
                     match parse_option_summary_greeks(msg, &instrument_id, ts_init) {
                         Ok(greeks) => {
                             Python::attach(|py| match greeks.into_py_any(py) {
@@ -1578,7 +1581,7 @@ fn handle_channel_data(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_bbo_tbt(
     data: serde_json::Value,
     instrument_id: InstrumentId,
@@ -1637,6 +1640,7 @@ fn handle_instruments(
     callback: &Py<PyAny>,
 ) {
     let ts_init = clock.get_time_ns();
+
     for okx_inst in okx_instruments {
         let inst_key = Ustr::from(&okx_inst.inst_id);
         let (margin_init, margin_maint, maker_fee, taker_fee) =
@@ -1676,7 +1680,7 @@ fn handle_instruments(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_orders(
     order_msgs: &[OKXOrderMsg],
     account_id: AccountId,
@@ -1688,6 +1692,7 @@ fn handle_orders(
     callback: &Py<PyAny>,
 ) {
     let ts_init = clock.get_time_ns();
+
     match parse_order_msg_vec(
         order_msgs,
         account_id,
@@ -1754,6 +1759,7 @@ fn handle_positions(
 ) {
     if let Ok(positions) = serde_json::from_value::<Vec<OKXPosition>>(data) {
         let ts_init = clock.get_time_ns();
+
         for position in positions {
             let inst_key = Ustr::from(&position.inst_id);
             if let Some(instrument) = instruments_by_symbol.get(&inst_key) {
@@ -1776,7 +1782,7 @@ fn handle_positions(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_order_response(
     id: Option<&str>,
     op: &OKXWsOperation,
@@ -1933,7 +1939,7 @@ fn handle_order_response(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_send_failed(
     request_id: &str,
     client_order_id: Option<ClientOrderId>,

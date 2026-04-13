@@ -242,7 +242,7 @@ impl KrakenFuturesDataClient {
         instruments.load().get(&instrument_id).cloned()
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn handle_ws_message(
         msg: KrakenFuturesWsMessage,
         sender: &tokio::sync::mpsc::UnboundedSender<DataEvent>,
@@ -290,6 +290,7 @@ impl KrakenFuturesDataClient {
                     log::warn!("No instrument for product_id: {}", trade.product_id);
                     return;
                 };
+
                 match parse_futures_ws_trade_tick(&trade, &instrument, ts_init) {
                     Ok(tick) => {
                         if let Err(e) = sender.send(DataEvent::Data(Data::Trade(tick))) {
@@ -308,6 +309,7 @@ impl KrakenFuturesDataClient {
                 };
                 let instrument_id = instrument.id();
                 let sequence = book_sequence.load(Ordering::Relaxed);
+
                 match parse_futures_ws_book_snapshot_deltas(
                     &snapshot,
                     &instrument,

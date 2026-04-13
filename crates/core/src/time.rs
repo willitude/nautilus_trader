@@ -100,6 +100,10 @@ pub fn duration_since_unix_epoch() -> Duration {
 /// Panics if the duration in nanoseconds exceeds `u64::MAX`.
 #[inline(always)]
 #[must_use]
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "value is guarded by the assert above (ns <= u64::MAX)"
+)]
 pub fn nanos_since_unix_epoch() -> u64 {
     let ns = duration_since_unix_epoch().as_nanos();
     assert!(
@@ -196,7 +200,7 @@ impl AtomicTime {
 
     /// Returns the current time as seconds.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::cast_precision_loss,
         reason = "Precision loss acceptable for time conversion"
     )]
@@ -305,6 +309,7 @@ impl AtomicTime {
         // This method guarantees strict consistency but may incur a performance cost under
         // high contention due to retries in the `compare_exchange` loop.
         let now = nanos_since_unix_epoch();
+
         loop {
             // Acquire to observe the latest stored value
             let last = self.load(Ordering::Acquire);
@@ -517,7 +522,7 @@ mod tests {
     }
 
     #[rstest]
-    #[allow(
+    #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
         reason = "Intentional cast for Python interop"

@@ -39,7 +39,7 @@ use nautilus_core::{
 use nautilus_live::{ExecutionClientCore, ExecutionEventEmitter};
 use nautilus_model::{
     accounts::AccountAny,
-    enums::{AccountType, OmsType, OrderSide, OrderType, TimeInForce, TriggerType},
+    enums::{AccountType, OmsType, OrderSide, OrderType, TimeInForce},
     events::OrderEventAny,
     identifiers::{AccountId, ClientId, Venue},
     orders::{Order, OrderAny},
@@ -49,7 +49,10 @@ use nautilus_model::{
 use tokio::task::JoinHandle;
 
 use crate::{
-    common::consts::{DERIBIT_VENUE, DERIBIT_WS_HEARTBEAT_SECS},
+    common::{
+        consts::{DERIBIT_VENUE, DERIBIT_WS_HEARTBEAT_SECS},
+        enums::resolve_trigger_type,
+    },
     config::DeribitExecClientConfig,
     http::{client::DeribitHttpClient, models::DeribitCurrency, query::GetOrderStateParams},
     websocket::{
@@ -85,7 +88,7 @@ impl DeribitExecutionClient {
                 config.api_key.clone(),
                 config.api_secret.clone(),
                 config.base_url_http.clone(),
-                config.use_testnet,
+                config.environment,
                 config.http_timeout_secs,
                 config.max_retries,
                 config.retry_delay_initial_ms,
@@ -95,7 +98,7 @@ impl DeribitExecutionClient {
         } else {
             DeribitHttpClient::new(
                 config.base_url_http.clone(),
-                config.use_testnet,
+                config.environment,
                 config.http_timeout_secs,
                 config.max_retries,
                 config.retry_delay_initial_ms,
@@ -109,7 +112,7 @@ impl DeribitExecutionClient {
             config.api_key.clone(),
             config.api_secret.clone(),
             DERIBIT_WS_HEARTBEAT_SECS,
-            config.use_testnet,
+            config.environment,
         )
         .context("failed to create WebSocket client for execution")?;
         // Set account ID for order/fill reports
@@ -201,16 +204,7 @@ impl DeribitExecutionClient {
         // Deribit's `good_til_day` expires at end of trading session (8 UTC).
         let valid_until = None;
 
-        // Map trigger type for stop orders
-        let trigger = order.trigger_type().and_then(|tt| {
-            match tt {
-                TriggerType::LastPrice => Some("last_price".to_string()),
-                TriggerType::MarkPrice => Some("mark_price".to_string()),
-                TriggerType::IndexPrice => Some("index_price".to_string()),
-                TriggerType::Default => Some("last_price".to_string()), // Deribit default
-                _ => None,
-            }
-        });
+        let trigger = resolve_trigger_type(order.trigger_type());
 
         Ok(DeribitOrderParams {
             instrument_name: order.instrument_id().symbol.to_string(),
@@ -378,12 +372,12 @@ impl ExecutionClient for DeribitExecutionClient {
         self.core.set_started();
 
         log::info!(
-            "Started: client_id={}, account_id={}, account_type={:?}, product_types={:?}, use_testnet={}",
+            "Started: client_id={}, account_id={}, account_type={:?}, product_types={:?}, environment={}",
             self.core.client_id,
             self.core.account_id,
             self.core.account_type,
             self.config.product_types,
-            self.config.use_testnet
+            self.config.environment
         );
         Ok(())
     }

@@ -24,9 +24,12 @@ use nautilus_model::{
 };
 use pyo3::{conversion::IntoPyObjectExt, prelude::*};
 
-use crate::websocket::{
-    HyperliquidWebSocketClient,
-    messages::{ExecutionReport, NautilusWsMessage},
+use crate::{
+    common::enums::HyperliquidEnvironment,
+    websocket::{
+        HyperliquidWebSocketClient,
+        messages::{ExecutionReport, NautilusWsMessage},
+    },
 };
 
 #[pymethods]
@@ -37,10 +40,14 @@ impl HyperliquidWebSocketClient {
     /// Orchestrates WebSocket connection and subscriptions using a command-based architecture,
     /// where the inner FeedHandler owns the WebSocketClient and handles all I/O.
     #[new]
-    #[pyo3(signature = (url=None, testnet=false, account_id=None))]
-    fn py_new(url: Option<String>, testnet: bool, account_id: Option<String>) -> Self {
+    #[pyo3(signature = (url=None, environment=HyperliquidEnvironment::Mainnet, account_id=None))]
+    fn py_new(
+        url: Option<String>,
+        environment: HyperliquidEnvironment,
+        account_id: Option<String>,
+    ) -> Self {
         let account_id = account_id.map(|s| AccountId::from(s.as_str()));
-        Self::new(url, testnet, account_id)
+        Self::new(url, environment, account_id)
     }
 
     /// Returns the URL of this WebSocket client.
@@ -122,7 +129,7 @@ impl HyperliquidWebSocketClient {
 
     /// Establishes WebSocket connection and spawns the message handler.
     #[pyo3(name = "connect")]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn py_connect<'py>(
         &self,
         py: Python<'py>,
@@ -215,6 +222,7 @@ impl HyperliquidWebSocketClient {
                                                         order_report.venue_order_id,
                                                         order_report.order_status
                                                     );
+
                                                     match Py::new(py, order_report) {
                                                         Ok(py_obj) => {
                                                             call_python_threadsafe(py, &call_soon, &callback, py_obj.into_any());
@@ -232,6 +240,7 @@ impl HyperliquidWebSocketClient {
                                                         fill_report.last_qty,
                                                         fill_report.last_px
                                                     );
+
                                                     match Py::new(py, fill_report) {
                                                         Ok(py_obj) => {
                                                             call_python_threadsafe(py, &call_soon, &callback, py_obj.into_any());
@@ -272,6 +281,7 @@ impl HyperliquidWebSocketClient {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let start = std::time::Instant::now();
+
             loop {
                 if client.is_active() {
                     return Ok(());

@@ -50,7 +50,7 @@ use std::{
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::correctness::FAILED;
+use crate::correctness::{CorrectnessError, CorrectnessResult, CorrectnessResultExt, FAILED};
 
 /// Maximum capacity in characters for a [`StackStr`].
 pub const STACKSTR_CAPACITY: usize = 36;
@@ -97,7 +97,7 @@ impl StackStr {
     /// - `s` exceeds 36 characters.
     #[must_use]
     pub fn new(s: &str) -> Self {
-        Self::new_checked(s).expect(FAILED)
+        Self::new_checked(s).expect_display(FAILED)
     }
 
     /// Creates a new [`StackStr`] with validation, returning an error on failure.
@@ -108,30 +108,44 @@ impl StackStr {
     /// - `s` is empty or contains only whitespace.
     /// - `s` contains non-ASCII characters or interior NUL bytes.
     /// - `s` exceeds 36 characters.
-    pub fn new_checked(s: &str) -> anyhow::Result<Self> {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "length is guarded by STACKSTR_CAPACITY check above (max 36, fits u8)"
+    )]
+    pub fn new_checked(s: &str) -> CorrectnessResult<Self> {
         if s.is_empty() {
-            anyhow::bail!("String is empty");
+            return Err(CorrectnessError::PredicateViolation {
+                message: "String is empty".to_string(),
+            });
         }
 
         if s.len() > STACKSTR_CAPACITY {
-            anyhow::bail!(
-                "String exceeds maximum length of {} characters, was {}",
-                STACKSTR_CAPACITY,
-                s.len()
-            );
+            return Err(CorrectnessError::PredicateViolation {
+                message: format!(
+                    "String exceeds maximum length of {} characters, was {}",
+                    STACKSTR_CAPACITY,
+                    s.len()
+                ),
+            });
         }
 
         if !s.is_ascii() {
-            anyhow::bail!("String contains non-ASCII character");
+            return Err(CorrectnessError::PredicateViolation {
+                message: "String contains non-ASCII character".to_string(),
+            });
         }
 
         let bytes = s.as_bytes();
         if bytes.contains(&0) {
-            anyhow::bail!("String contains interior NUL byte");
+            return Err(CorrectnessError::PredicateViolation {
+                message: "String contains interior NUL byte".to_string(),
+            });
         }
 
         if bytes.iter().all(|b| b.is_ascii_whitespace()) {
-            anyhow::bail!("String contains only whitespace");
+            return Err(CorrectnessError::PredicateViolation {
+                message: "String contains only whitespace".to_string(),
+            });
         }
 
         let mut value = [0u8; STACKSTR_BUFFER_SIZE];
@@ -152,7 +166,7 @@ impl StackStr {
     /// - `bytes` is empty or contains only whitespace.
     /// - `bytes` contains non-ASCII characters or interior NUL bytes.
     /// - `bytes` exceeds 36 bytes (excluding trailing null terminator).
-    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+    pub fn from_bytes(bytes: &[u8]) -> CorrectnessResult<Self> {
         // Strip trailing null terminator if present
         let bytes = if bytes.last() == Some(&0) {
             &bytes[..bytes.len() - 1]
@@ -160,7 +174,9 @@ impl StackStr {
             bytes
         };
 
-        let s = std::str::from_utf8(bytes).map_err(|e| anyhow::anyhow!("Invalid UTF-8: {e}"))?;
+        let s = std::str::from_utf8(bytes).map_err(|e| CorrectnessError::PredicateViolation {
+            message: format!("Invalid UTF-8: {e}"),
+        })?;
 
         Self::new_checked(s)
     }
@@ -178,6 +194,11 @@ impl StackStr {
     ///
     /// Violating these requirements causes a panic. If this function is called
     /// from C code, such a panic is undefined behavior.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the C string contains invalid UTF-8 or violates any of the
+    /// safety invariants listed above.
     #[must_use]
     pub unsafe fn from_c_ptr(ptr: *const c_char) -> Self {
         // SAFETY: Caller guarantees ptr is valid and null-terminated
@@ -371,7 +392,7 @@ impl PartialEq<str> for StackStr {
 }
 
 impl TryFrom<&[u8]> for StackStr {
-    type Error = anyhow::Error;
+    type Error = CorrectnessError;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         Self::from_bytes(bytes)
@@ -404,32 +425,32 @@ mod tests {
     }
 
     #[rstest]
-    #[should_panic]
+    #[should_panic(expected = "Condition failed")]
     fn test_exceeds_max_length() {
         let input = "x".repeat(37);
         let _ = StackStr::new(&input);
     }
 
     #[rstest]
-    #[should_panic]
+    #[should_panic(expected = "Condition failed")]
     fn test_empty_string() {
         let _ = StackStr::new("");
     }
 
     #[rstest]
-    #[should_panic]
+    #[should_panic(expected = "Condition failed")]
     fn test_whitespace_only() {
         let _ = StackStr::new("   ");
     }
 
     #[rstest]
-    #[should_panic]
+    #[should_panic(expected = "Condition failed")]
     fn test_non_ascii() {
         let _ = StackStr::new("hello\u{1F600}"); // emoji
     }
 
     #[rstest]
-    #[should_panic]
+    #[should_panic(expected = "Condition failed")]
     fn test_interior_nul_byte() {
         let _ = StackStr::new("abc\0def");
     }
@@ -649,7 +670,7 @@ mod tests {
         let s = StackStr::new("test");
         let ptr = s.as_ptr();
         // Read byte at position 4 (after "test")
-        let null_byte = unsafe { *ptr.offset(4) };
+        let null_byte = unsafe { *ptr.add(4) };
         assert_eq!(null_byte, 0);
     }
 
@@ -818,7 +839,7 @@ mod tests {
     #[rstest]
     fn test_clone_equals_original() {
         let a = StackStr::new("test");
-        #[allow(clippy::clone_on_copy)]
+        #[expect(clippy::clone_on_copy)]
         let b = a.clone();
         assert_eq!(a, b);
     }

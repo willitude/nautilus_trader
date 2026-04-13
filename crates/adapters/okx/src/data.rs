@@ -30,15 +30,15 @@ use nautilus_common::{
     messages::{
         DataEvent,
         data::{
-            BarsResponse, BookResponse, DataResponse, FundingRatesResponse, InstrumentResponse,
-            InstrumentsResponse, RequestBars, RequestBookSnapshot, RequestFundingRates,
-            RequestInstrument, RequestInstruments, RequestTrades, SubscribeBars,
-            SubscribeBookDeltas, SubscribeFundingRates, SubscribeIndexPrices, SubscribeInstrument,
-            SubscribeInstrumentStatus, SubscribeInstruments, SubscribeMarkPrices,
-            SubscribeOptionGreeks, SubscribeQuotes, SubscribeTrades, TradesResponse,
-            UnsubscribeBars, UnsubscribeBookDeltas, UnsubscribeFundingRates,
-            UnsubscribeIndexPrices, UnsubscribeInstrumentStatus, UnsubscribeMarkPrices,
-            UnsubscribeOptionGreeks, UnsubscribeQuotes, UnsubscribeTrades,
+            BarsResponse, BookResponse, DataResponse, ForwardPricesResponse, FundingRatesResponse,
+            InstrumentResponse, InstrumentsResponse, RequestBars, RequestBookSnapshot,
+            RequestForwardPrices, RequestFundingRates, RequestInstrument, RequestInstruments,
+            RequestTrades, SubscribeBars, SubscribeBookDeltas, SubscribeFundingRates,
+            SubscribeIndexPrices, SubscribeInstrument, SubscribeInstrumentStatus,
+            SubscribeInstruments, SubscribeMarkPrices, SubscribeOptionGreeks, SubscribeQuotes,
+            SubscribeTrades, TradesResponse, UnsubscribeBars, UnsubscribeBookDeltas,
+            UnsubscribeFundingRates, UnsubscribeIndexPrices, UnsubscribeInstrumentStatus,
+            UnsubscribeMarkPrices, UnsubscribeOptionGreeks, UnsubscribeQuotes, UnsubscribeTrades,
         },
     },
 };
@@ -123,7 +123,7 @@ impl OKXDataClient {
                 config.max_retries,
                 config.retry_delay_initial_ms,
                 config.retry_delay_max_ms,
-                config.is_demo,
+                config.environment,
                 config.http_proxy_url.clone(),
             )?
         } else {
@@ -133,7 +133,7 @@ impl OKXDataClient {
                 config.max_retries,
                 config.retry_delay_initial_ms,
                 config.retry_delay_max_ms,
-                config.is_demo,
+                config.environment,
                 config.http_proxy_url.clone(),
             )?
         };
@@ -230,7 +230,7 @@ impl OKXDataClient {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn handle_ws_message(
         message: OKXWsMessage,
         data_sender: &tokio::sync::mpsc::UnboundedSender<DataEvent>,
@@ -253,6 +253,7 @@ impl OKXDataClient {
                     return;
                 };
                 let ts_init = clock.get_time_ns();
+
                 match parse_book_msg_vec(
                     data,
                     &instrument.id(),
@@ -279,6 +280,7 @@ impl OKXDataClient {
                 // its own inst_id that we resolve per-message.
                 if matches!(channel, OKXWsChannel::OptionSummary) {
                     let ts_init = clock.get_time_ns();
+
                     match serde_json::from_value::<Vec<OKXOptionSummaryMsg>>(data) {
                         Ok(msgs) => {
                             let subs = option_greeks_subs.load();
@@ -292,6 +294,7 @@ impl OKXDataClient {
                                 if !subs.contains(&instrument_id) {
                                     continue;
                                 }
+
                                 match parse_option_summary_greeks(msg, &instrument_id, ts_init) {
                                     Ok(greeks) => {
                                         if let Err(e) =
@@ -339,6 +342,7 @@ impl OKXDataClient {
                             log::warn!("No cached instrument for index ticker symbol: {sym}");
                             continue;
                         };
+
                         match parse_index_price_msg_vec(
                             data.clone(),
                             &instrument.id(),
@@ -620,11 +624,11 @@ impl DataClient for OKXDataClient {
 
     fn start(&mut self) -> anyhow::Result<()> {
         log::info!(
-            "Started: client_id={}, vip_level={:?}, instrument_types={:?}, is_demo={}, http_proxy_url={:?}, ws_proxy_url={:?}",
+            "Started: client_id={}, vip_level={:?}, instrument_types={:?}, environment={}, http_proxy_url={:?}, ws_proxy_url={:?}",
             self.client_id,
             self.vip_level(),
             self.config.instrument_types,
-            self.config.is_demo,
+            self.config.environment,
             self.config.http_proxy_url,
             self.config.ws_proxy_url,
         );
@@ -749,6 +753,7 @@ impl DataClient for OKXDataClient {
             let greeks_subs = self.option_greeks_subs.clone();
             let cancel = self.cancellation_token.clone();
             let clock = self.clock;
+
             let handle = get_runtime().spawn(async move {
                 let mut instruments_by_symbol: AHashMap<Ustr, InstrumentAny> = insts
                     .load()
@@ -758,6 +763,7 @@ impl DataClient for OKXDataClient {
                 let mut quote_cache = QuoteCache::new();
                 let mut funding_cache: AHashMap<Ustr, (Ustr, u64)> = AHashMap::new();
                 pin_mut!(stream);
+
                 loop {
                     tokio::select! {
                         Some(message) = stream.next() => {
@@ -810,6 +816,7 @@ impl DataClient for OKXDataClient {
             let greeks_subs = self.option_greeks_subs.clone();
             let cancel = self.cancellation_token.clone();
             let clock = self.clock;
+
             let handle = get_runtime().spawn(async move {
                 let mut instruments_by_symbol: AHashMap<Ustr, InstrumentAny> = insts
                     .load()
@@ -819,6 +826,7 @@ impl DataClient for OKXDataClient {
                 let mut quote_cache = QuoteCache::new();
                 let mut funding_cache: AHashMap<Ustr, (Ustr, u64)> = AHashMap::new();
                 pin_mut!(stream);
+
                 loop {
                     tokio::select! {
                         Some(message) = stream.next() => {
@@ -1646,6 +1654,58 @@ impl DataClient for OKXDataClient {
                     }
                 }
                 Err(e) => log::error!("Funding rates request failed: {e:?}"),
+            }
+        });
+
+        Ok(())
+    }
+
+    fn request_forward_prices(&self, request: RequestForwardPrices) -> anyhow::Result<()> {
+        let http = self.http_client.clone();
+        let sender = self.data_sender.clone();
+        let underlying = request.underlying.to_string();
+        let instrument_id = request.instrument_id;
+        let request_id = request.request_id;
+        let client_id = request.client_id.unwrap_or(self.client_id);
+        let params = request.params;
+        let clock = self.clock;
+        let venue = *OKX_VENUE;
+
+        get_runtime().spawn(async move {
+            match http
+                .request_forward_prices(&underlying, instrument_id)
+                .await
+                .context("failed to request forward prices from OKX")
+            {
+                Ok(forward_prices) => {
+                    let response = DataResponse::ForwardPrices(ForwardPricesResponse::new(
+                        request_id,
+                        client_id,
+                        venue,
+                        forward_prices,
+                        clock.get_time_ns(),
+                        params,
+                    ));
+
+                    if let Err(e) = sender.send(DataEvent::Response(response)) {
+                        log::error!("Failed to send forward prices response: {e}");
+                    }
+                }
+                Err(e) => {
+                    log::error!("Forward prices request failed for {underlying}: {e:?}");
+                    let response = DataResponse::ForwardPrices(ForwardPricesResponse::new(
+                        request_id,
+                        client_id,
+                        venue,
+                        Vec::new(),
+                        clock.get_time_ns(),
+                        params,
+                    ));
+
+                    if let Err(e) = sender.send(DataEvent::Response(response)) {
+                        log::error!("Failed to send forward prices response: {e}");
+                    }
+                }
             }
         });
 

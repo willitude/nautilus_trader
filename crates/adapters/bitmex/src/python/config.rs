@@ -18,7 +18,10 @@
 use nautilus_model::identifiers::AccountId;
 use pyo3::prelude::*;
 
-use crate::config::{BitmexDataClientConfig, BitmexExecClientConfig};
+use crate::{
+    common::enums::BitmexEnvironment,
+    config::{BitmexDataClientConfig, BitmexExecClientConfig},
+};
 
 #[pymethods]
 #[pyo3_stub_gen::derive::gen_stub_pymethods]
@@ -39,11 +42,11 @@ impl BitmexDataClientConfig {
         recv_window_ms = None,
         active_only = None,
         update_instruments_interval_mins = None,
-        use_testnet = None,
+        environment = None,
         max_requests_per_second = None,
         max_requests_per_minute = None,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_new(
         api_key: Option<String>,
         api_secret: Option<String>,
@@ -58,7 +61,7 @@ impl BitmexDataClientConfig {
         recv_window_ms: Option<u64>,
         active_only: Option<bool>,
         update_instruments_interval_mins: Option<u64>,
-        use_testnet: Option<bool>,
+        environment: Option<BitmexEnvironment>,
         max_requests_per_second: Option<u32>,
         max_requests_per_minute: Option<u32>,
     ) -> Self {
@@ -79,7 +82,7 @@ impl BitmexDataClientConfig {
             recv_window_ms: recv_window_ms.unwrap_or(defaults.recv_window_ms),
             active_only: active_only.unwrap_or(defaults.active_only),
             update_instruments_interval_mins,
-            use_testnet: use_testnet.unwrap_or(defaults.use_testnet),
+            environment: environment.unwrap_or(defaults.environment),
             max_requests_per_second: max_requests_per_second
                 .unwrap_or(defaults.max_requests_per_second),
             max_requests_per_minute: max_requests_per_minute
@@ -110,7 +113,7 @@ impl BitmexExecClientConfig {
         heartbeat_interval_secs = None,
         recv_window_ms = None,
         active_only = None,
-        use_testnet = None,
+        environment = None,
         account_id = None,
         max_requests_per_second = None,
         max_requests_per_minute = None,
@@ -120,7 +123,7 @@ impl BitmexExecClientConfig {
         canceller_proxy_urls = None,
         deadmans_switch_timeout_secs = None,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_new(
         api_key: Option<String>,
         api_secret: Option<String>,
@@ -134,7 +137,7 @@ impl BitmexExecClientConfig {
         heartbeat_interval_secs: Option<u64>,
         recv_window_ms: Option<u64>,
         active_only: Option<bool>,
-        use_testnet: Option<bool>,
+        environment: Option<BitmexEnvironment>,
         account_id: Option<AccountId>,
         max_requests_per_second: Option<u32>,
         max_requests_per_minute: Option<u32>,
@@ -161,7 +164,7 @@ impl BitmexExecClientConfig {
                 .unwrap_or(defaults.heartbeat_interval_secs),
             recv_window_ms: recv_window_ms.unwrap_or(defaults.recv_window_ms),
             active_only: active_only.unwrap_or(defaults.active_only),
-            use_testnet: use_testnet.unwrap_or(defaults.use_testnet),
+            environment: environment.unwrap_or(defaults.environment),
             account_id,
             max_requests_per_second: max_requests_per_second
                 .unwrap_or(defaults.max_requests_per_second),

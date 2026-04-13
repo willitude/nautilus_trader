@@ -48,12 +48,12 @@ use nautilus_live::{ExecutionClientCore, ExecutionEventEmitter};
 use nautilus_model::{
     accounts::AccountAny,
     enums::{
-        LiquiditySide, OmsType, OrderSide, OrderType, PositionSideSpecified, TrailingOffsetType,
-        TriggerType,
+        AccountType, LiquiditySide, OmsType, OrderSide, OrderType, PositionSideSpecified,
+        TrailingOffsetType, TriggerType,
     },
     events::{
         AccountState, OrderAccepted, OrderCancelRejected, OrderCanceled, OrderEventAny,
-        OrderFilled, OrderModifyRejected, OrderRejected, OrderUpdated,
+        OrderExpired, OrderFilled, OrderModifyRejected, OrderRejected, OrderUpdated,
     },
     identifiers::{
         AccountId, ClientId, ClientOrderId, InstrumentId, PositionId, Symbol, TradeId, Venue,
@@ -76,7 +76,7 @@ use super::{
         query::{
             BatchCancelItem, BinanceAllOrdersParamsBuilder, BinanceOpenOrdersParamsBuilder,
             BinanceOrderQueryParamsBuilder, BinancePositionRiskParamsBuilder,
-            BinanceUserTradesParamsBuilder,
+            BinanceSetLeverageParams, BinanceSetMarginTypeParams, BinanceUserTradesParamsBuilder,
         },
     },
     websocket::{
@@ -110,8 +110,8 @@ use crate::{
         },
         encoder::{decode_broker_id, encode_broker_id},
         enums::{
-            BinanceEnvironment, BinancePositionSide, BinanceProductType, BinanceSide,
-            BinanceTimeInForce, BinanceWorkingType,
+            BinanceEnvironment, BinancePositionSide, BinancePriceMatch, BinanceProductType,
+            BinanceSide, BinanceTimeInForce, BinanceWorkingType,
         },
         symbol::format_binance_symbol,
     },
@@ -191,6 +191,7 @@ impl BinanceFuturesExecutionClient {
             None, // recv_window
             None, // timeout_secs
             None, // proxy_url
+            config.treat_expired_as_canceled,
         )
         .context("failed to construct Binance Futures HTTP client")?;
 
@@ -300,7 +301,21 @@ impl BinanceFuturesExecutionClient {
 
     /// Converts Binance futures account info to Nautilus account state.
     fn create_account_state(&self, account_info: &BinanceFuturesAccountInfo) -> AccountState {
-        let ts_now = self.clock.get_time_ns();
+        Self::create_account_state_from(
+            account_info,
+            self.core.account_id,
+            self.core.account_type,
+            self.clock,
+        )
+    }
+
+    fn create_account_state_from(
+        account_info: &BinanceFuturesAccountInfo,
+        account_id: AccountId,
+        account_type: AccountType,
+        clock: &'static AtomicTime,
+    ) -> AccountState {
+        let ts_now = clock.get_time_ns();
 
         let balances: Vec<AccountBalance> = account_info
             .assets
@@ -351,8 +366,8 @@ impl BinanceFuturesExecutionClient {
         }
 
         AccountState::new(
-            self.core.account_id,
-            self.core.account_type,
+            account_id,
+            account_type,
             balances,
             margins,
             true, // reported
@@ -375,18 +390,29 @@ impl BinanceFuturesExecutionClient {
         Ok(self.create_account_state(&account_info))
     }
 
-    fn update_account_state(&self) -> anyhow::Result<()> {
-        let runtime = get_runtime();
-        let account_state = runtime.block_on(self.refresh_account_state())?;
+    fn update_account_state(&self) {
+        let http_client = self.http_client.clone();
+        let account_id = self.core.account_id;
+        let account_type = self.core.account_type;
+        let emitter = self.emitter.clone();
+        let clock = self.clock;
 
-        let ts_now = self.clock.get_time_ns();
-        self.emitter.emit_account_state(
-            account_state.balances.clone(),
-            account_state.margins.clone(),
-            account_state.is_reported,
-            ts_now,
-        );
-        Ok(())
+        self.spawn_task("query_account", async move {
+            let account_info = http_client
+                .query_account()
+                .await
+                .context("Binance Futures account state request failed")?;
+            let account_state =
+                Self::create_account_state_from(&account_info, account_id, account_type, clock);
+            let ts_now = clock.get_time_ns();
+            emitter.emit_account_state(
+                account_state.balances.clone(),
+                account_state.margins.clone(),
+                account_state.is_reported,
+                ts_now,
+            );
+            Ok(())
+        });
     }
 
     async fn init_hedge_mode(&self) -> anyhow::Result<bool> {
@@ -437,6 +463,7 @@ impl BinanceFuturesExecutionClient {
                 strategy_id,
                 order_side,
                 order_type,
+                price,
             },
         );
 
@@ -447,6 +474,13 @@ impl BinanceFuturesExecutionClient {
             .as_ref()
             .and_then(|p| p.get_bool("close_position"))
             .unwrap_or(false);
+
+        let price_match = cmd
+            .params
+            .as_ref()
+            .and_then(|p| p.get_str("price_match"))
+            .map(BinancePriceMatch::from_param)
+            .transpose()?;
 
         let callback_rate = trailing_offset
             .map(trailing_offset_to_callback_rate_string)
@@ -493,7 +527,11 @@ impl BinanceFuturesExecutionClient {
                     None
                 },
                 quantity: Some(quantity.to_string()),
-                price: price.map(|p| p.to_string()),
+                price: if price_match.is_some() {
+                    None
+                } else {
+                    price.map(|p| p.to_string())
+                },
                 new_client_order_id: Some(client_id_str),
                 stop_price: trigger_price.map(|p| p.to_string()),
                 reduce_only: if reduce_only { Some(true) } else { None },
@@ -506,7 +544,7 @@ impl BinanceFuturesExecutionClient {
                 new_order_resp_type: None,
                 good_till_date: None,
                 recv_window: None,
-                price_match: None,
+                price_match,
                 self_trade_prevention_mode: None,
             };
 
@@ -587,6 +625,7 @@ impl BinanceFuturesExecutionClient {
                         reduce_only,
                         post_only,
                         position_side,
+                        price_match,
                     )
                     .await
             };
@@ -855,6 +894,51 @@ impl BinanceFuturesExecutionClient {
             Some(entry_price),
         ))
     }
+
+    async fn apply_futures_config(&self) -> anyhow::Result<()> {
+        if let Some(ref leverages) = self.config.futures_leverages {
+            for (symbol, leverage) in leverages {
+                let params = BinanceSetLeverageParams {
+                    symbol: symbol.clone(),
+                    leverage: *leverage,
+                    recv_window: None,
+                };
+                let response = self
+                    .http_client
+                    .set_leverage(&params)
+                    .await
+                    .context(format!("failed to set leverage for {symbol}"))?;
+                log::info!("Set leverage {} {}X", response.symbol, response.leverage);
+            }
+        }
+
+        if let Some(ref margin_types) = self.config.futures_margin_types {
+            for (symbol, margin_type) in margin_types {
+                let params = BinanceSetMarginTypeParams {
+                    symbol: symbol.clone(),
+                    margin_type: *margin_type,
+                    recv_window: None,
+                };
+
+                match self.http_client.set_margin_type(&params).await {
+                    Ok(_) => {
+                        log::info!("Set {symbol} margin type to {margin_type:?}");
+                    }
+                    Err(e) => {
+                        let err_str = format!("{e}");
+                        if err_str.contains("-4046") {
+                            log::info!("{symbol} margin type already {margin_type:?}");
+                        } else {
+                            return Err(e)
+                                .context(format!("failed to set margin type for {symbol}"));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait(?Send)]
@@ -919,6 +1003,11 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
             instruments
         };
 
+        // Apply configured leverage and margin types
+        self.apply_futures_config()
+            .await
+            .context("failed to apply futures config")?;
+
         // Create listen key for user data stream
         log::info!("Creating listen key for user data stream...");
         let listen_key_response = self
@@ -959,6 +1048,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
             let product_type = self.product_type;
             let use_position_ids = self.config.use_position_ids;
             let default_taker_fee = self.config.default_taker_fee;
+            let treat_expired_as_canceled = self.config.treat_expired_as_canceled;
             let dispatch_state = self.dispatch_state.clone();
             let triggered_algo_ids = self.triggered_algo_order_ids.clone();
             let algo_client_ids = self.algo_client_order_ids.clone();
@@ -968,6 +1058,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
 
             let ws_task = get_runtime().spawn(async move {
                 pin_mut!(stream);
+
                 loop {
                     tokio::select! {
                         Some(message) = stream.next() => {
@@ -983,6 +1074,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
                                 &algo_client_ids,
                                 use_position_ids,
                                 default_taker_fee,
+                                treat_expired_as_canceled,
                                 &seen_trade_ids,
                             );
                         }
@@ -1185,6 +1277,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
                     self.core.account_id,
                     instrument_id,
                     size_precision,
+                    self.config.treat_expired_as_canceled,
                     ts_init,
                 )?;
                 Ok(Some(report))
@@ -1244,6 +1337,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
                         self.core.account_id,
                         instrument_id,
                         size_precision,
+                        self.config.treat_expired_as_canceled,
                         ts_init,
                     ) {
                         reports.push(report);
@@ -1258,6 +1352,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
                             self.core.account_id,
                             instrument.id(),
                             instrument.size_precision(),
+                            self.config.treat_expired_as_canceled,
                             ts_init,
                         )
                     {
@@ -1324,6 +1419,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
                     self.core.account_id,
                     instrument_id,
                     size_precision,
+                    self.config.treat_expired_as_canceled,
                     ts_init,
                 ) {
                     reports.push(report);
@@ -1368,6 +1464,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
         let ts_init = self.clock.get_time_ns();
 
         let mut reports = Vec::new();
+
         for trade in trades {
             if let Ok(report) = trade.to_fill_report(
                 self.core.account_id,
@@ -1399,6 +1496,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
         let positions = self.http_client.query_positions(&params).await?;
 
         let mut reports = Vec::new();
+
         for position in positions {
             let position_amt: f64 = position.position_amt.parse().unwrap_or(0.0);
             if position_amt == 0.0 {
@@ -1472,7 +1570,8 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
     }
 
     fn query_account(&self, _cmd: &QueryAccount) -> anyhow::Result<()> {
-        self.update_account_state()
+        self.update_account_state();
+        Ok(())
     }
 
     fn query_order(&self, cmd: &QueryOrder) -> anyhow::Result<()> {
@@ -1498,6 +1597,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
             BINANCE_NAUTILUS_FUTURES_BROKER_ID,
         ));
         let (_, size_precision) = self.get_instrument_precision(command.instrument_id);
+        let treat_expired_as_canceled = self.config.treat_expired_as_canceled;
 
         self.spawn_task("query_order", async move {
             let mut builder = BinanceOrderQueryParamsBuilder::default();
@@ -1523,6 +1623,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
                         account_id,
                         command.instrument_id,
                         size_precision,
+                        treat_expired_as_canceled,
                         ts_init,
                     )?;
 
@@ -1659,6 +1760,19 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
             if order.is_reduce_only() {
                 anyhow::bail!("`close_position` cannot be combined with `reduce_only` on Binance");
             }
+        }
+
+        if let Some(pm_str) = cmd.params.as_ref().and_then(|p| p.get_str("price_match")) {
+            BinancePriceMatch::from_param(pm_str)?;
+            let order_type = order.order_type();
+            anyhow::ensure!(
+                !order.is_post_only(),
+                "price_match cannot be combined with post-only orders"
+            );
+            anyhow::ensure!(
+                order_type == OrderType::Limit,
+                "price_match is not supported for order type {order_type:?}"
+            );
         }
 
         log::debug!("OrderSubmitted client_order_id={}", order.client_order_id());
@@ -1983,6 +2097,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
                     Ok(results) => {
                         for (i, result) in results.iter().enumerate() {
                             let cancel = &chunk[i];
+
                             match result {
                                 BatchOrderResult::Success(response) => {
                                     let venue_order_id =
@@ -2058,7 +2173,7 @@ impl ExecutionClient for BinanceFuturesExecutionClient {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn dispatch_ws_message(
     msg: BinanceFuturesWsStreamsMessage,
     emitter: &ExecutionEventEmitter,
@@ -2071,6 +2186,7 @@ fn dispatch_ws_message(
     algo_client_ids: &Arc<AtomicSet<ClientOrderId>>,
     use_position_ids: bool,
     default_taker_fee: Decimal,
+    treat_expired_as_canceled: bool,
     seen_trade_ids: &Arc<Mutex<FifoCache<(ustr::Ustr, i64), 10_000>>>,
 ) {
     match msg {
@@ -2085,6 +2201,7 @@ fn dispatch_ws_message(
                 dispatch_state,
                 use_position_ids,
                 default_taker_fee,
+                treat_expired_as_canceled,
                 seen_trade_ids,
             );
         }
@@ -2152,7 +2269,7 @@ fn dispatch_ws_message(
 ///
 /// Tracked orders produce proper order events. Untracked orders fall back
 /// to execution reports for reconciliation.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn dispatch_order_update(
     msg: &BinanceFuturesOrderUpdateMsg,
     emitter: &ExecutionEventEmitter,
@@ -2163,6 +2280,7 @@ fn dispatch_order_update(
     dispatch_state: &WsDispatchState,
     use_position_ids: bool,
     default_taker_fee: Decimal,
+    treat_expired_as_canceled: bool,
     seen_trade_ids: &Arc<Mutex<FifoCache<(ustr::Ustr, i64), 10_000>>>,
 ) {
     let order = &msg.order;
@@ -2263,6 +2381,43 @@ fn dispatch_order_update(
                     false,
                 );
                 emitter.send_order_event(OrderEventAny::Accepted(accepted));
+
+                // Detect venue-assigned price changes (e.g. priceMatch orders)
+                if let Some(submitted_price) = identity.price {
+                    let venue_price: f64 = order.original_price.parse().unwrap_or(0.0);
+                    if venue_price > 0.0 {
+                        let venue_price = Price::new(venue_price, price_precision);
+                        let submitted_at_precision =
+                            Price::new(submitted_price.as_f64(), price_precision);
+
+                        if venue_price != submitted_at_precision {
+                            let quantity: f64 = order.original_qty.parse().unwrap_or(0.0);
+                            let trigger_price: f64 = order.stop_price.parse().unwrap_or(0.0);
+                            let updated = OrderUpdated::new(
+                                emitter.trader_id(),
+                                identity.strategy_id,
+                                identity.instrument_id,
+                                client_order_id,
+                                Quantity::new(quantity, size_precision),
+                                UUID4::new(),
+                                ts_event,
+                                ts_init,
+                                false,
+                                Some(venue_order_id),
+                                Some(account_id),
+                                Some(venue_price),
+                                if trigger_price > 0.0 {
+                                    Some(Price::new(trigger_price, price_precision))
+                                } else {
+                                    None
+                                },
+                                None,
+                                false,
+                            );
+                            emitter.send_order_event(OrderEventAny::Updated(updated));
+                        }
+                    }
+                }
             }
             BinanceExecutionType::Trade => {
                 let dedup_key = (order.symbol, order.trade_id);
@@ -2340,7 +2495,7 @@ fn dispatch_order_update(
                     dispatch_state.cleanup_terminal(client_order_id);
                 }
             }
-            BinanceExecutionType::Canceled | BinanceExecutionType::Expired => {
+            BinanceExecutionType::Canceled => {
                 ensure_accepted_emitted(
                     client_order_id,
                     account_id,
@@ -2364,6 +2519,48 @@ fn dispatch_order_update(
                 );
                 dispatch_state.cleanup_terminal(client_order_id);
                 emitter.send_order_event(OrderEventAny::Canceled(canceled));
+            }
+            BinanceExecutionType::Expired => {
+                ensure_accepted_emitted(
+                    client_order_id,
+                    account_id,
+                    venue_order_id,
+                    &identity,
+                    emitter,
+                    dispatch_state,
+                    ts_init,
+                );
+                dispatch_state.cleanup_terminal(client_order_id);
+
+                if treat_expired_as_canceled {
+                    let canceled = OrderCanceled::new(
+                        emitter.trader_id(),
+                        identity.strategy_id,
+                        identity.instrument_id,
+                        client_order_id,
+                        UUID4::new(),
+                        ts_event,
+                        ts_init,
+                        false,
+                        Some(venue_order_id),
+                        Some(account_id),
+                    );
+                    emitter.send_order_event(OrderEventAny::Canceled(canceled));
+                } else {
+                    let expired = OrderExpired::new(
+                        emitter.trader_id(),
+                        identity.strategy_id,
+                        identity.instrument_id,
+                        client_order_id,
+                        UUID4::new(),
+                        ts_event,
+                        ts_init,
+                        false,
+                        Some(venue_order_id),
+                        Some(account_id),
+                    );
+                    emitter.send_order_event(OrderEventAny::Expired(expired));
+                }
             }
             BinanceExecutionType::Amendment => {
                 let quantity: f64 = order.original_qty.parse().unwrap_or(0.0);
@@ -2432,12 +2629,14 @@ fn dispatch_order_update(
                     Ok(fill) => emitter.send_fill_report(fill),
                     Err(e) => log::error!("Failed to parse fill report: {e}"),
                 }
+
                 match parse_futures_order_update_to_order_status(
                     msg,
                     instrument_id,
                     price_precision,
                     size_precision,
                     account_id,
+                    treat_expired_as_canceled,
                     ts_init,
                 ) {
                     Ok(status) => emitter.send_order_status_report(status),
@@ -2454,6 +2653,7 @@ fn dispatch_order_update(
                     price_precision,
                     size_precision,
                     account_id,
+                    treat_expired_as_canceled,
                     ts_init,
                 ) {
                     Ok(status) => emitter.send_order_status_report(status),
@@ -2502,7 +2702,7 @@ fn make_venue_position_id(
 }
 
 /// Skips events with zero fill quantity (pending liquidation notifications).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn dispatch_exchange_generated_fill(
     msg: &BinanceFuturesOrderUpdateMsg,
     emitter: &ExecutionEventEmitter,
@@ -2580,6 +2780,7 @@ fn dispatch_exchange_generated_fill(
         price_precision,
         size_precision,
         account_id,
+        false, // Exchange-generated fills are not subject to expired-as-canceled
         ts_init,
     ) {
         Ok(status) => emitter.send_order_status_report(status),
@@ -2587,7 +2788,7 @@ fn dispatch_exchange_generated_fill(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn dispatch_algo_update(
     msg: &BinanceFuturesAlgoUpdateMsg,
     emitter: &ExecutionEventEmitter,
@@ -3008,6 +3209,7 @@ mod tests {
             &dispatch_state,
             true,
             Decimal::new(4, 4),
+            false,
             &seen_trade_ids,
         );
         dispatch_order_update(
@@ -3020,6 +3222,7 @@ mod tests {
             &dispatch_state,
             true,
             Decimal::new(4, 4),
+            false,
             &seen_trade_ids,
         );
 
@@ -3065,6 +3268,7 @@ mod tests {
             &dispatch_state,
             true,
             Decimal::new(4, 4),
+            false,
             &seen_trade_ids,
         );
         dispatch_order_update(
@@ -3077,6 +3281,7 @@ mod tests {
             &dispatch_state,
             true,
             Decimal::new(4, 4),
+            false,
             &seen_trade_ids,
         );
 
@@ -3127,6 +3332,7 @@ mod tests {
             &dispatch_state,
             true,
             Decimal::new(4, 4),
+            false,
             &seen_trade_ids,
         );
         dispatch_order_update(
@@ -3139,6 +3345,7 @@ mod tests {
             &dispatch_state,
             true,
             Decimal::new(4, 4),
+            false,
             &seen_trade_ids,
         );
 
@@ -3296,6 +3503,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         )
         .expect("Test HTTP client should be created")
     }
@@ -3312,6 +3520,7 @@ mod tests {
                 strategy_id: StrategyId::from("TEST-STRATEGY"),
                 order_side: OrderSide::Buy,
                 order_type: OrderType::Limit,
+                price: None,
             },
         );
         dispatch_state

@@ -75,23 +75,32 @@ use std::{
 use ahash::AHashMap;
 use datafusion::arrow::record_batch::RecordBatch;
 use futures::StreamExt;
-use heck::ToSnakeCase;
 use itertools::Itertools;
 use nautilus_common::live::get_runtime;
 use nautilus_core::{
     UnixNanos,
     datetime::{iso8601_to_unix_nanos, unix_nanos_to_iso8601},
+    string::to_snake_case,
 };
 use nautilus_model::{
     data::{
-        Bar, CustomData, Data, HasTsInit, IndexPriceUpdate, MarkPriceUpdate, OrderBookDelta,
-        OrderBookDepth10, QuoteTick, TradeTick, close::InstrumentClose,
-        is_monotonically_increasing_by_init, to_variant,
+        Bar, CustomData, Data, FundingRateUpdate, HasTsInit, IndexPriceUpdate, InstrumentStatus,
+        MarkPriceUpdate, OrderBookDelta, OrderBookDepth10, QuoteTick, TradeTick,
+        close::InstrumentClose, is_monotonically_increasing_by_init, to_variant,
+    },
+    events::{
+        AccountState, OrderAccepted, OrderCancelRejected, OrderCanceled, OrderDenied,
+        OrderEmulated, OrderExpired, OrderFilled, OrderInitialized, OrderModifyRejected,
+        OrderPendingCancel, OrderPendingUpdate, OrderRejected, OrderReleased, OrderSnapshot,
+        OrderSubmitted, OrderTriggered, OrderUpdated, PositionAdjusted, PositionChanged,
+        PositionClosed, PositionOpened, PositionSnapshot,
     },
     instruments::InstrumentAny,
+    reports::{ExecutionMassStatus, FillReport, OrderStatusReport, PositionStatusReport},
 };
 use nautilus_serialization::arrow::{
-    DecodeDataFromRecordBatch, EncodeToRecordBatch, custom::CustomDataDecoder,
+    DecodeDataFromRecordBatch, DecodeTypedFromRecordBatch, EncodeToRecordBatch,
+    custom::CustomDataDecoder,
 };
 use object_store::{ObjectStore, ObjectStoreExt, path::Path as ObjectPath};
 use serde::Serialize;
@@ -495,7 +504,7 @@ impl ParquetDataCatalog {
             return Ok(PathBuf::new());
         }
 
-        let type_name = std::any::type_name::<T>().to_snake_case();
+        let type_name = to_snake_case(std::any::type_name::<T>());
         Self::check_ascending_timestamps(&data, &type_name)?;
 
         let start_ts = start.unwrap_or(data.first().unwrap().ts_init());
@@ -690,6 +699,7 @@ impl ParquetDataCatalog {
         // Group instruments by concrete type and instrument_id so mixed InstrumentAny
         // inputs are written as separate parquet batches with stable ordering.
         let mut by_type_and_id: BTreeMap<(String, String), Vec<InstrumentAny>> = BTreeMap::new();
+
         for instrument in instruments {
             let instrument_type = Self::instrument_type_name(&instrument).to_string();
             let instrument_id = Instrument::id(&instrument).to_string();
@@ -838,6 +848,7 @@ impl ParquetDataCatalog {
         })?;
 
         let mut instrument_files = Vec::new();
+
         for object in list_result {
             let path_str = object.location.to_string();
             if !path_str.ends_with(".parquet") {
@@ -961,7 +972,7 @@ impl ParquetDataCatalog {
             return Ok(PathBuf::new());
         }
 
-        let type_name = std::any::type_name::<T>().to_snake_case();
+        let type_name = to_snake_case(std::any::type_name::<T>());
         Self::check_ascending_timestamps(&data, &type_name)?;
 
         let start_ts = data.first().unwrap().ts_init();
@@ -1307,6 +1318,7 @@ impl ParquetDataCatalog {
             if let Some(ids) = identifiers {
                 let path_components = extract_path_components(&path_str);
                 let mut matches = false;
+
                 for id in ids {
                     if path_components.iter().any(|c| c.contains(id)) {
                         matches = true;
@@ -1742,6 +1754,98 @@ impl ParquetDataCatalog {
         Ok(to_variant::<T>(all_data))
     }
 
+    /// Queries typed records that are not represented by the [`Data`] enum.
+    pub fn query_typed<T>(
+        &mut self,
+        identifiers: Option<Vec<String>>,
+        start: Option<UnixNanos>,
+        end: Option<UnixNanos>,
+        where_clause: Option<&str>,
+        files: Option<Vec<String>>,
+        optimize_file_loading: bool,
+    ) -> anyhow::Result<Vec<T>>
+    where
+        T: DecodeTypedFromRecordBatch + CatalogPathPrefix + HasTsInit,
+    {
+        self.reset_session();
+
+        if self.is_remote_uri() {
+            let url = url::Url::parse(&self.original_uri)?;
+            let host = url
+                .host_str()
+                .ok_or_else(|| anyhow::anyhow!("Remote URI missing host/bucket name"))?;
+            let base_url = url::Url::parse(&format!("{}://{}", url.scheme(), host))?;
+            self.session
+                .register_object_store(&base_url, self.object_store.clone());
+        }
+
+        let files_list = if let Some(files) = files {
+            files
+        } else {
+            self.query_files(T::path_prefix(), identifiers, start, end)?
+        };
+
+        let mut all_records = Vec::new();
+
+        if optimize_file_loading {
+            let directories: HashSet<String> = files_list
+                .iter()
+                .filter_map(|file_uri| {
+                    Path::new(file_uri)
+                        .parent()
+                        .map(|path| path.to_string_lossy().to_string())
+                })
+                .collect();
+
+            for directory in directories {
+                let path_parts: Vec<&str> = directory.split('/').collect();
+                let identifier = if path_parts.is_empty() {
+                    "unknown".to_string()
+                } else {
+                    path_parts[path_parts.len() - 1].to_string()
+                };
+                let safe_sql_identifier = make_sql_safe_identifier(&identifier);
+                let table_name = format!("{}_{}", T::path_prefix(), safe_sql_identifier);
+                let query = build_query(&table_name, start, end, where_clause);
+                let resolved_path = self.resolve_directory_for_datafusion(&directory);
+                let batches = self.session.collect_query_batches(
+                    &table_name,
+                    &resolved_path,
+                    Some(&query),
+                )?;
+
+                all_records.extend(self.convert_record_batches_to_typed::<T>(batches)?);
+            }
+        } else {
+            for file_uri in &files_list {
+                let identifier = extract_identifier_from_path(file_uri);
+                let safe_sql_identifier = make_sql_safe_identifier(&identifier);
+                let safe_filename = extract_sql_safe_filename(file_uri);
+                let table_name = format!(
+                    "{}_{}_{}",
+                    T::path_prefix(),
+                    safe_sql_identifier,
+                    safe_filename
+                );
+                let query = build_query(&table_name, start, end, where_clause);
+                let resolved_path = self.resolve_path_for_datafusion(file_uri);
+                let batches = self.session.collect_query_batches(
+                    &table_name,
+                    &resolved_path,
+                    Some(&query),
+                )?;
+
+                all_records.extend(self.convert_record_batches_to_typed::<T>(batches)?);
+            }
+        }
+
+        if !is_monotonically_increasing_by_init(&all_records) {
+            all_records.sort_by_key(|record| record.ts_init());
+        }
+
+        Ok(all_records)
+    }
+
     /// Queries custom data dynamically by type name.
     ///
     /// This method allows querying custom data types without compile-time knowledge of the type.
@@ -1767,7 +1871,7 @@ impl ParquetDataCatalog {
     /// - File discovery fails.
     /// - Data decoding fails.
     /// - Query execution fails.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn query_custom_data_dynamic(
         &mut self,
         type_name: &str,
@@ -2523,6 +2627,7 @@ impl ParquetDataCatalog {
         })?;
 
         let mut intervals = Vec::new();
+
         for object in list_result {
             let path_str = object.location.to_string();
             if path_str.ends_with(".parquet")
@@ -2861,21 +2966,13 @@ impl ParquetDataCatalog {
     /// # Ok::<(), anyhow::Error>(())
     /// ```
     ///
-    /// # Note
-    ///
-    /// FundingRateUpdate is intentionally excluded from the catalog and feather writer;
-    /// directories such as "funding_rate_update" or "funding_rates" are filtered out.
     pub fn list_data_types(&self) -> anyhow::Result<Vec<String>> {
-        let stems = self.list_directory_stems("data")?;
-        Ok(stems
-            .into_iter()
-            .filter(|s| !Self::is_excluded_stream_data_type(s))
-            .collect())
+        self.list_directory_stems("data")
     }
 
-    /// Data types that are not persisted by the Rust feather writer or catalog (e.g. FundingRateUpdate).
-    fn is_excluded_stream_data_type(name: &str) -> bool {
-        matches!(name, "funding_rate_update" | "funding_rates")
+    /// Data types that are not persisted by the Rust feather writer or catalog.
+    fn is_excluded_stream_data_type(_name: &str) -> bool {
+        false
     }
 
     /// Lists all backtest run IDs available in the catalog.
@@ -3108,7 +3205,7 @@ impl ParquetDataCatalog {
 
         let mut all_data: Vec<Data> = Vec::new();
 
-        // Process each data type (FundingRateUpdate excluded - see is_excluded_stream_data_type)
+        // Process each persisted data type.
         for data_cls in data_types
             .into_iter()
             .filter(|s| !Self::is_excluded_stream_data_type(s))
@@ -3391,6 +3488,7 @@ impl ParquetDataCatalog {
 
         // Read all batches
         let mut batches = Vec::new();
+
         for batch_result in reader {
             let batch = batch_result.map_err(|e| anyhow::anyhow!("Failed to read batch: {e}"))?;
             batches.push(batch);
@@ -3444,6 +3542,7 @@ impl ParquetDataCatalog {
 
         // Process each batch
         let mut all_data = Vec::new();
+
         for mut batch in batches {
             // Handle ts_event/ts_init replacement if requested
             if use_ts_event_for_ts_init {
@@ -3479,6 +3578,44 @@ impl ParquetDataCatalog {
         Ok(to_variant::<T>(all_data))
     }
 
+    /// Converts RecordBatches directly to strongly typed values.
+    fn convert_record_batches_to_typed<T>(
+        &self,
+        batches: Vec<RecordBatch>,
+    ) -> anyhow::Result<Vec<T>>
+    where
+        T: DecodeTypedFromRecordBatch,
+    {
+        if batches.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut all_data = Vec::new();
+
+        for batch in batches {
+            let metadata = batch.schema().metadata().clone();
+            let decoded = T::decode_typed_batch(&metadata, batch)
+                .map_err(|e| anyhow::anyhow!("Failed to decode batch: {e}"))?;
+            all_data.extend(decoded);
+        }
+
+        Ok(all_data)
+    }
+
+    fn write_typed_batches<T>(&self, batches: Vec<RecordBatch>) -> anyhow::Result<()>
+    where
+        T: DecodeTypedFromRecordBatch + EncodeToRecordBatch + CatalogPathPrefix + HasTsInit,
+    {
+        let mut data: Vec<T> = self.convert_record_batches_to_typed(batches)?;
+
+        if !is_monotonically_increasing_by_init(&data) {
+            data.sort_by_key(|item| item.ts_init());
+        }
+
+        self.write_to_parquet(data, None, None, None)?;
+        Ok(())
+    }
+
     pub fn convert_stream_to_data(
         &mut self,
         instance_id: &str,
@@ -3489,14 +3626,14 @@ impl ParquetDataCatalog {
     ) -> anyhow::Result<()> {
         let subdirectory = subdirectory.unwrap_or("backtest");
 
-        // FundingRateUpdate is not persisted in Rust feather/catalog; skip without error
+        // Skip unsupported stream data types without error.
         if Self::is_excluded_stream_data_type(data_cls) {
             return Ok(());
         }
 
         // Convert data class name to filename (e.g., "quotes" -> "quotes")
         // The data_cls should already be in the correct format (snake_case)
-        let data_name = data_cls.to_snake_case();
+        let data_name = to_snake_case(data_cls);
 
         // List all feather files for this data class
         let feather_files =
@@ -3595,6 +3732,93 @@ impl ParquetDataCatalog {
                     }
                     self.write_to_parquet(data, None, None, None)?;
                 }
+                "funding_rate_update" => {
+                    self.write_typed_batches::<FundingRateUpdate>(batches)?;
+                }
+                "instrument_status" => {
+                    self.write_typed_batches::<InstrumentStatus>(batches)?;
+                }
+                "account_state" => {
+                    self.write_typed_batches::<AccountState>(batches)?;
+                }
+                "order_initialized" => {
+                    self.write_typed_batches::<OrderInitialized>(batches)?;
+                }
+                "order_denied" => {
+                    self.write_typed_batches::<OrderDenied>(batches)?;
+                }
+                "order_emulated" => {
+                    self.write_typed_batches::<OrderEmulated>(batches)?;
+                }
+                "order_submitted" => {
+                    self.write_typed_batches::<OrderSubmitted>(batches)?;
+                }
+                "order_accepted" => {
+                    self.write_typed_batches::<OrderAccepted>(batches)?;
+                }
+                "order_rejected" => {
+                    self.write_typed_batches::<OrderRejected>(batches)?;
+                }
+                "order_pending_cancel" => {
+                    self.write_typed_batches::<OrderPendingCancel>(batches)?;
+                }
+                "order_canceled" => {
+                    self.write_typed_batches::<OrderCanceled>(batches)?;
+                }
+                "order_cancel_rejected" => {
+                    self.write_typed_batches::<OrderCancelRejected>(batches)?;
+                }
+                "order_expired" => {
+                    self.write_typed_batches::<OrderExpired>(batches)?;
+                }
+                "order_triggered" => {
+                    self.write_typed_batches::<OrderTriggered>(batches)?;
+                }
+                "order_pending_update" => {
+                    self.write_typed_batches::<OrderPendingUpdate>(batches)?;
+                }
+                "order_released" => {
+                    self.write_typed_batches::<OrderReleased>(batches)?;
+                }
+                "order_modify_rejected" => {
+                    self.write_typed_batches::<OrderModifyRejected>(batches)?;
+                }
+                "order_updated" => {
+                    self.write_typed_batches::<OrderUpdated>(batches)?;
+                }
+                "order_filled" => {
+                    self.write_typed_batches::<OrderFilled>(batches)?;
+                }
+                "position_opened" => {
+                    self.write_typed_batches::<PositionOpened>(batches)?;
+                }
+                "position_changed" => {
+                    self.write_typed_batches::<PositionChanged>(batches)?;
+                }
+                "position_closed" => {
+                    self.write_typed_batches::<PositionClosed>(batches)?;
+                }
+                "position_adjusted" => {
+                    self.write_typed_batches::<PositionAdjusted>(batches)?;
+                }
+                "order_snapshot" => {
+                    self.write_typed_batches::<OrderSnapshot>(batches)?;
+                }
+                "position_snapshot" => {
+                    self.write_typed_batches::<PositionSnapshot>(batches)?;
+                }
+                "order_status_report" => {
+                    self.write_typed_batches::<OrderStatusReport>(batches)?;
+                }
+                "fill_report" => {
+                    self.write_typed_batches::<FillReport>(batches)?;
+                }
+                "position_status_report" => {
+                    self.write_typed_batches::<PositionStatusReport>(batches)?;
+                }
+                "execution_mass_status" => {
+                    self.write_typed_batches::<ExecutionMassStatus>(batches)?;
+                }
                 _ => {
                     if data_cls.starts_with("custom/") {
                         let data =
@@ -3678,6 +3902,35 @@ impl_catalog_path_prefix!(IndexPriceUpdate, "index_prices");
 impl_catalog_path_prefix!(MarkPriceUpdate, "mark_prices");
 impl_catalog_path_prefix!(InstrumentClose, "instrument_closes");
 impl_catalog_path_prefix!(InstrumentAny, "instruments");
+impl_catalog_path_prefix!(FundingRateUpdate, "funding_rate_update");
+impl_catalog_path_prefix!(InstrumentStatus, "instrument_status");
+impl_catalog_path_prefix!(AccountState, "account_state");
+impl_catalog_path_prefix!(OrderInitialized, "order_initialized");
+impl_catalog_path_prefix!(OrderDenied, "order_denied");
+impl_catalog_path_prefix!(OrderEmulated, "order_emulated");
+impl_catalog_path_prefix!(OrderSubmitted, "order_submitted");
+impl_catalog_path_prefix!(OrderAccepted, "order_accepted");
+impl_catalog_path_prefix!(OrderRejected, "order_rejected");
+impl_catalog_path_prefix!(OrderPendingCancel, "order_pending_cancel");
+impl_catalog_path_prefix!(OrderCanceled, "order_canceled");
+impl_catalog_path_prefix!(OrderCancelRejected, "order_cancel_rejected");
+impl_catalog_path_prefix!(OrderExpired, "order_expired");
+impl_catalog_path_prefix!(OrderTriggered, "order_triggered");
+impl_catalog_path_prefix!(OrderPendingUpdate, "order_pending_update");
+impl_catalog_path_prefix!(OrderReleased, "order_released");
+impl_catalog_path_prefix!(OrderModifyRejected, "order_modify_rejected");
+impl_catalog_path_prefix!(OrderUpdated, "order_updated");
+impl_catalog_path_prefix!(OrderFilled, "order_filled");
+impl_catalog_path_prefix!(PositionOpened, "position_opened");
+impl_catalog_path_prefix!(PositionChanged, "position_changed");
+impl_catalog_path_prefix!(PositionClosed, "position_closed");
+impl_catalog_path_prefix!(PositionAdjusted, "position_adjusted");
+impl_catalog_path_prefix!(OrderSnapshot, "order_snapshot");
+impl_catalog_path_prefix!(PositionSnapshot, "position_snapshot");
+impl_catalog_path_prefix!(OrderStatusReport, "order_status_report");
+impl_catalog_path_prefix!(FillReport, "fill_report");
+impl_catalog_path_prefix!(PositionStatusReport, "position_status_report");
+impl_catalog_path_prefix!(ExecutionMassStatus, "execution_mass_status");
 
 /// Converts timestamps to a filename using ISO 8601 format.
 ///

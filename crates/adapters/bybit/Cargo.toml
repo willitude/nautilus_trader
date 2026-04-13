@@ -68,7 +68,6 @@ dashmap = { workspace = true }
 derive_builder = { workspace = true }
 dotenvy = { workspace = true }
 futures-util = { workspace = true }
-hex = { workspace = true }
 log = { workspace = true }
 rust_decimal = { workspace = true }
 serde = { workspace = true }
@@ -106,12 +105,14 @@ harness = false
 name = "bybit-http"
 path = "bin/http.rs"
 doc = false
+test = false
 
 # Run with `cargo run -p nautilus-bybit --bin bybit-ws-data`.
 [[bin]]
 name = "bybit-ws-data"
 path = "bin/ws_data.rs"
 doc = false
+test = false
 
 # Run with `cargo run --example bybit-data-tester --package nautilus-bybit`.
 [[example]]

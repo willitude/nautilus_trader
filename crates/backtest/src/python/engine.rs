@@ -118,7 +118,7 @@ impl PyBacktestEngine {
             price_protection_points = None,
         )
     )]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_add_venue(
         &mut self,
         venue: Venue,
@@ -218,7 +218,7 @@ impl PyBacktestEngine {
 
     /// Changes the fill model for a venue.
     #[pyo3(name = "change_fill_model")]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn py_change_fill_model(
         &mut self,
         py: Python,
@@ -266,7 +266,7 @@ impl PyBacktestEngine {
         reason = "Required for Python actor component registration"
     )]
     #[pyo3(name = "add_actor_from_config")]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn py_add_actor_from_config(
         &mut self,
         _py: Python,
@@ -406,7 +406,7 @@ impl PyBacktestEngine {
         reason = "Required for Python strategy component registration"
     )]
     #[pyo3(name = "add_strategy_from_config")]
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn py_add_strategy_from_config(
         &mut self,
         _py: Python,
@@ -539,6 +539,59 @@ impl PyBacktestEngine {
 
         log::info!("Registered Python strategy {strategy_id}");
         Ok(())
+    }
+
+    /// Adds a native Rust strategy from its config.
+    ///
+    /// The config type determines which built-in strategy is constructed.
+    /// All execution happens in Rust; Python is the configuration layer.
+    #[cfg(feature = "examples")]
+    #[pyo3(name = "add_native_strategy")]
+    fn py_add_native_strategy(&mut self, config: &Bound<'_, PyAny>) -> PyResult<()> {
+        use nautilus_trading::examples::strategies::{
+            DeltaNeutralVol, DeltaNeutralVolConfig, EmaCross, EmaCrossConfig, GridMarketMaker,
+            GridMarketMakerConfig,
+        };
+
+        if let Ok(config) = config.extract::<EmaCrossConfig>() {
+            self.0
+                .add_strategy(EmaCross::from_config(config))
+                .map_err(to_pyruntime_err)
+        } else if let Ok(config) = config.extract::<GridMarketMakerConfig>() {
+            self.0
+                .add_strategy(GridMarketMaker::new(config))
+                .map_err(to_pyruntime_err)
+        } else if let Ok(config) = config.extract::<DeltaNeutralVolConfig>() {
+            self.0
+                .add_strategy(DeltaNeutralVol::new(config))
+                .map_err(to_pyruntime_err)
+        } else {
+            let type_name = config.get_type().name()?;
+            Err(to_pytype_err(format!(
+                "Unsupported native strategy config type: {type_name}",
+            )))
+        }
+    }
+
+    /// Adds a native Rust actor from its config.
+    ///
+    /// The config type determines which built-in actor is constructed.
+    /// All execution happens in Rust; Python is the configuration layer.
+    #[cfg(feature = "examples")]
+    #[pyo3(name = "add_native_actor")]
+    fn py_add_native_actor(&mut self, config: &Bound<'_, PyAny>) -> PyResult<()> {
+        use nautilus_trading::examples::actors::{BookImbalanceActor, BookImbalanceActorConfig};
+
+        if let Ok(config) = config.extract::<BookImbalanceActorConfig>() {
+            self.0
+                .add_actor(BookImbalanceActor::from_config(config))
+                .map_err(to_pyruntime_err)
+        } else {
+            let type_name = config.get_type().name()?;
+            Err(to_pytype_err(format!(
+                "Unsupported native actor config type: {type_name}",
+            )))
+        }
     }
 
     /// Runs the backtest engine.

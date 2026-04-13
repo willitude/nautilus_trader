@@ -60,7 +60,8 @@ pub struct InstrumentStatus {
 
 impl InstrumentStatus {
     /// Creates a new [`InstrumentStatus`] instance.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
+    #[must_use]
     pub fn new(
         instrument_id: InstrumentId,
         action: MarketStatusAction,

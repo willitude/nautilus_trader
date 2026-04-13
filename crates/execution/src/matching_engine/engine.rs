@@ -137,7 +137,7 @@ impl Debug for OrderMatchingEngine {
 
 impl OrderMatchingEngine {
     /// Creates a new [`OrderMatchingEngine`] instance.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         instrument: InstrumentAny,
         raw_id: u32,
@@ -1098,6 +1098,7 @@ impl OrderMatchingEngine {
             self.check_price_precision(order.price.precision, "bid price")?;
             self.check_size_precision(order.size.precision, "bid size")?;
         }
+
         for order in &depth.asks {
             if order.side == OrderSide::NoOrderSide || !order.size.is_positive() {
                 continue;
@@ -1186,6 +1187,18 @@ impl OrderMatchingEngine {
             .unwrap();
 
         if self.book_type == BookType::L1_MBP {
+            // Stale update: skip book mutation and cache updates
+            if quote.ts_event < self.book.ts_last {
+                log::warn!(
+                    "Skipping stale quote: ts_event {} < book.ts_last {} for {}",
+                    quote.ts_event,
+                    self.book.ts_last,
+                    self.book.instrument_id,
+                );
+                self.iterate(quote.ts_init, AggressorSide::NoAggressor);
+                return;
+            }
+
             if self.config.queue_position {
                 self.decrement_l1_queue_on_quote(
                     quote.bid_price.raw,
@@ -1478,6 +1491,18 @@ impl OrderMatchingEngine {
         let price_raw = trade.price.raw;
 
         if self.book_type == BookType::L1_MBP {
+            // Stale update: skip book mutation and trade execution
+            if trade.ts_event < self.book.ts_last {
+                log::warn!(
+                    "Skipping stale trade: ts_event {} < book.ts_last {} for {}",
+                    trade.ts_event,
+                    self.book.ts_last,
+                    self.book.instrument_id,
+                );
+                self.iterate(trade.ts_init, AggressorSide::NoAggressor);
+                return;
+            }
+
             self.book.update_trade_tick(trade).unwrap();
         }
 
@@ -1764,7 +1789,6 @@ impl OrderMatchingEngine {
     /// # Panics
     ///
     /// Panics if an OTO child order references a missing or non-OTO parent.
-    #[allow(clippy::needless_return)]
     pub fn process_order(&mut self, order: &mut OrderAny, account_id: AccountId) {
         // Validate inside a cache borrow scope, collecting any rejection
         // reason rather than emitting events while the borrow is held.
@@ -2073,6 +2097,7 @@ impl OrderMatchingEngine {
             .into_iter()
             .cloned()
             .collect::<Vec<OrderAny>>();
+
         for order in open_orders {
             if command.order_side != OrderSide::NoOrderSide
                 && command.order_side != order.order_side()
@@ -2571,6 +2596,7 @@ impl OrderMatchingEngine {
                 MatchAction::TriggerStop(id) => self.trigger_stop_order(id),
             }
         }
+
         for action in self.core.iterate_asks() {
             match action {
                 MatchAction::FillLimit(id) => self.fill_limit_order(id),
@@ -2962,6 +2988,7 @@ impl OrderMatchingEngine {
                             } else {
                                 order_price
                             };
+
                             for fill in &mut fills {
                                 let last_px = fill.0;
                                 if last_px < order_price {
@@ -2984,6 +3011,7 @@ impl OrderMatchingEngine {
                             } else {
                                 order_price
                             };
+
                             for fill in &mut fills {
                                 let last_px = fill.0;
                                 if last_px > order_price {
@@ -4360,7 +4388,7 @@ impl OrderMatchingEngine {
         self.dispatch_order_event(event);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn generate_order_modify_rejected(
         &self,
         trader_id: TraderId,
@@ -4388,7 +4416,7 @@ impl OrderMatchingEngine {
         self.dispatch_order_event(event);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn generate_order_cancel_rejected(
         &self,
         trader_id: TraderId,
@@ -4497,7 +4525,7 @@ impl OrderMatchingEngine {
         self.dispatch_order_event(event);
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn generate_order_filled(
         &mut self,
         order: &OrderAny,

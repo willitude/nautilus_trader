@@ -41,7 +41,11 @@ use nautilus_network::{
 use ustr::Ustr;
 
 use crate::{
-    common::{enums::HyperliquidBarInterval, parse::bar_type_to_interval},
+    common::{
+        consts::ws_url,
+        enums::{HyperliquidBarInterval, HyperliquidEnvironment},
+        parse::bar_type_to_interval,
+    },
     websocket::{
         enums::HyperliquidWsChannel,
         handler::{FeedHandler, HandlerCommand},
@@ -114,19 +118,17 @@ impl Clone for HyperliquidWebSocketClient {
 impl HyperliquidWebSocketClient {
     /// Creates a new Hyperliquid WebSocket client without connecting.
     ///
-    /// If `url` is `None`, the appropriate URL will be determined based on the `testnet` flag:
-    /// - `testnet=false`: `wss://api.hyperliquid.xyz/ws`
-    /// - `testnet=true`: `wss://api.hyperliquid-testnet.xyz/ws`
+    /// If `url` is `None`, the appropriate URL will be determined from the `environment`:
+    /// - `Mainnet`: `wss://api.hyperliquid.xyz/ws`
+    /// - `Testnet`: `wss://api.hyperliquid-testnet.xyz/ws`
     ///
     /// The connection will be established when `connect()` is called.
-    pub fn new(url: Option<String>, testnet: bool, account_id: Option<AccountId>) -> Self {
-        let url = url.unwrap_or_else(|| {
-            if testnet {
-                "wss://api.hyperliquid-testnet.xyz/ws".to_string()
-            } else {
-                "wss://api.hyperliquid.xyz/ws".to_string()
-            }
-        });
+    pub fn new(
+        url: Option<String>,
+        environment: HyperliquidEnvironment,
+        account_id: Option<AccountId>,
+    ) -> Self {
+        let url = url.unwrap_or_else(|| ws_url(environment).to_string());
         let connection_mode = Arc::new(ArcSwap::new(Arc::new(AtomicU8::new(
             ConnectionMode::Closed as u8,
         ))));
@@ -230,6 +232,7 @@ impl HyperliquidWebSocketClient {
                     "Resubscribing to {} active subscriptions after reconnection",
                     topics.len()
                 );
+
                 for topic in topics {
                     match subscription_from_topic(&topic) {
                         Ok(subscription) => {
@@ -247,6 +250,7 @@ impl HyperliquidWebSocketClient {
                     }
                 }
             };
+
             loop {
                 match handler.next().await {
                     Some(NautilusWsMessage::Reconnected) => {
@@ -283,6 +287,18 @@ impl HyperliquidWebSocketClient {
 
     pub fn set_task_handle(&mut self, handle: tokio::task::JoinHandle<()>) {
         self.task_handle = Some(handle);
+    }
+
+    /// Force-close fallback for the sync `stop()` path.
+    /// Prefer `disconnect()` for graceful shutdown.
+    pub(crate) fn abort(&mut self) {
+        self.signal.store(true, Ordering::Relaxed);
+        self.connection_mode
+            .store(Arc::new(AtomicU8::new(ConnectionMode::Closed as u8)));
+
+        if let Some(handle) = self.task_handle.take() {
+            handle.abort();
+        }
     }
 
     /// Disconnects the WebSocket connection.
@@ -340,6 +356,7 @@ impl HyperliquidWebSocketClient {
     /// - Spot uses @{pair_index} format (e.g., "@107") or slash format for PURR
     pub fn cache_instruments(&mut self, instruments: Vec<InstrumentAny>) {
         let mut map = AHashMap::new();
+
         for inst in instruments {
             let coin = inst.raw_symbol().inner();
             map.insert(coin, inst);

@@ -15,11 +15,6 @@
 
 //! Python bindings for the Binance adapter.
 
-#![allow(
-    clippy::missing_errors_doc,
-    reason = "errors documented on underlying Rust methods"
-)]
-
 pub mod arrow;
 pub mod config;
 pub mod enums;
@@ -40,13 +35,13 @@ use crate::{
         bar::BinanceBar,
         consts::{BINANCE_NAUTILUS_FUTURES_BROKER_ID, BINANCE_NAUTILUS_SPOT_BROKER_ID},
         encoder::decode_broker_id,
-        enums::{BinanceEnvironment, BinancePositionSide, BinanceProductType},
+        enums::{BinanceEnvironment, BinanceMarginType, BinancePositionSide, BinanceProductType},
     },
     config::{BinanceDataClientConfig, BinanceExecClientConfig},
     factories::{BinanceDataClientFactory, BinanceExecutionClientFactory},
 };
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn extract_binance_data_factory(
     py: Python<'_>,
     factory: Py<PyAny>,
@@ -59,7 +54,7 @@ fn extract_binance_data_factory(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn extract_binance_exec_factory(
     py: Python<'_>,
     factory: Py<PyAny>,
@@ -72,7 +67,7 @@ fn extract_binance_exec_factory(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn extract_binance_data_config(
     py: Python<'_>,
     config: Py<PyAny>,
@@ -85,7 +80,7 @@ fn extract_binance_data_config(
     }
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn extract_binance_exec_config(
     py: Python<'_>,
     config: Py<PyAny>,
@@ -135,6 +130,7 @@ fn py_decode_binance_futures_client_order_id(encoded: &str) -> String {
 pub fn binance(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<BinanceProductType>()?;
     m.add_class::<BinanceEnvironment>()?;
+    m.add_class::<BinanceMarginType>()?;
     m.add_class::<BinancePositionSide>()?;
     m.add_class::<BinanceBar>()?;
     m.add_function(wrap_pyfunction!(arrow::get_binance_arrow_schema_map, m)?)?;

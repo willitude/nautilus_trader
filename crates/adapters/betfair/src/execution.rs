@@ -16,6 +16,7 @@
 //! Live execution client for the Betfair adapter.
 
 use std::{
+    fmt,
     future::Future,
     sync::{
         Arc, Mutex,
@@ -62,12 +63,15 @@ use tokio::task::JoinHandle;
 
 use crate::{
     common::{
-        consts::BETFAIR_VENUE,
+        consts::{
+            BETFAIR_VENUE, METHOD_CANCEL_ORDERS, METHOD_GET_ACCOUNT_FUNDS,
+            METHOD_LIST_CURRENT_ORDERS, METHOD_PLACE_ORDERS, METHOD_REPLACE_ORDERS,
+        },
         credential::BetfairCredential,
         enums::{
-            BetfairOrderType, BetfairSide, BetfairTimeInForce, ExecutionReportStatus,
-            InstructionReportErrorCode, InstructionReportStatus, OrderProjection, PersistenceType,
-            StreamingOrderStatus, StreamingSide,
+            BetfairOrderType, BetfairSide, BetfairTimeInForce, ExecutionReportErrorCode,
+            ExecutionReportStatus, InstructionReportErrorCode, InstructionReportStatus,
+            OrderProjection, PersistenceType, StreamingOrderStatus, StreamingSide,
         },
         parse::{
             extract_market_id, extract_selection_id, make_customer_order_ref,
@@ -85,8 +89,8 @@ use crate::{
             AccountFundsResponse, CancelExecutionReport, CancelInstruction, CancelOrdersParams,
             CurrentOrderSummaryReport, LimitOnCloseOrder, LimitOrder, ListCurrentOrdersParams,
             MarketOnCloseOrder, MarketVersion, PlaceExecutionReport, PlaceInstruction,
-            PlaceOrdersParams, ReplaceExecutionReport, ReplaceInstruction, ReplaceOrdersParams,
-            TimeRange,
+            PlaceInstructionReport, PlaceOrdersParams, ReplaceExecutionReport, ReplaceInstruction,
+            ReplaceInstructionReport, ReplaceOrdersParams, TimeRange,
         },
         parse::{parse_current_order_fill_report, parse_current_order_report},
     },
@@ -363,7 +367,7 @@ impl BetfairExecutionClient {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn create_ocm_handler(
         emitter: ExecutionEventEmitter,
         account_id: AccountId,
@@ -495,7 +499,7 @@ impl BetfairExecutionClient {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn process_unmatched_order(
         uo: &crate::stream::messages::UnmatchedOrder,
         instrument_id: InstrumentId,
@@ -692,7 +696,7 @@ impl ExecutionClient for BetfairExecutionClient {
 
         let funds: AccountFundsResponse = self
             .http_client
-            .send_accounts("AccountAPING/v1.0/getAccountFunds", serde_json::json!({}))
+            .send_accounts(METHOD_GET_ACCOUNT_FUNDS, serde_json::json!({}))
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -756,19 +760,31 @@ impl ExecutionClient for BetfairExecutionClient {
         let keep_alive_client = Arc::clone(&self.http_client);
         let keep_alive_stream = Arc::clone(self.stream_client.as_ref().unwrap());
         let keep_alive_app_key = self.credential.app_key().to_string();
+
         self.keep_alive_handle = Some(get_runtime().spawn(async move {
             let interval = tokio::time::Duration::from_secs(KEEP_ALIVE_INTERVAL_SECS);
             loop {
                 tokio::time::sleep(interval).await;
 
-                if let Err(e) = keep_alive_client.keep_alive().await {
-                    log::warn!("Betfair execution keep-alive failed: {e}");
-                } else {
-                    if let Some(token) = keep_alive_client.session_token().await {
-                        keep_alive_stream.update_auth(&keep_alive_app_key, token);
+                match keep_alive_client.keep_alive().await {
+                    Ok(()) => {}
+                    Err(ref e) if e.is_login_failed() => {
+                        log::warn!("Betfair execution session expired, attempting re-login: {e}");
+                        if let Err(e) = keep_alive_client.reconnect().await {
+                            log::error!("Betfair execution re-login failed: {e}");
+                            continue;
+                        }
                     }
-                    log::debug!("Betfair execution session keep-alive sent");
+                    Err(e) => {
+                        log::warn!("Betfair execution keep-alive failed (transient): {e}");
+                        continue;
+                    }
                 }
+
+                if let Some(token) = keep_alive_client.session_token().await {
+                    keep_alive_stream.update_auth(&keep_alive_app_key, token);
+                }
+                log::debug!("Betfair execution session keep-alive sent");
             }
         }));
 
@@ -783,15 +799,17 @@ impl ExecutionClient for BetfairExecutionClient {
                 let interval = tokio::time::Duration::from_secs(interval_secs);
                 loop {
                     tokio::time::sleep(interval).await;
+
                     match acct_client
                         .send_accounts::<AccountFundsResponse, _>(
-                            "AccountAPING/v1.0/getAccountFunds",
+                            METHOD_GET_ACCOUNT_FUNDS,
                             serde_json::json!({}),
                         )
                         .await
                     {
                         Ok(funds) => {
                             let ts_init = acct_clock.get_time_ns();
+
                             match parse_account_state(
                                 &funds,
                                 acct_id,
@@ -816,12 +834,24 @@ impl ExecutionClient for BetfairExecutionClient {
         let reconnect_clock = self.clock;
         let reconnect_acct_id = self.core.account_id;
         let reconnect_currency = self.currency;
+
         self.reconnect_handle = Some(get_runtime().spawn(async move {
             while reconnect_rx.recv().await.is_some() {
                 log::info!("Handling execution stream reconnection");
 
-                if let Err(e) = reconnect_http.keep_alive().await {
-                    log::warn!("Failed to refresh session on reconnect: {e}");
+                match reconnect_http.keep_alive().await {
+                    Ok(()) => {}
+                    Err(ref e) if e.is_login_failed() => {
+                        log::warn!("Session expired on reconnect, attempting re-login: {e}");
+                        if let Err(e) = reconnect_http.reconnect().await {
+                            log::error!("Re-login failed on reconnect: {e}");
+                            continue;
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Keep-alive failed on reconnect (transient): {e}");
+                        continue;
+                    }
                 }
 
                 if let Some(token) = reconnect_http.session_token().await {
@@ -830,13 +860,14 @@ impl ExecutionClient for BetfairExecutionClient {
 
                 match reconnect_http
                     .send_accounts::<AccountFundsResponse, _>(
-                        "AccountAPING/v1.0/getAccountFunds",
+                        METHOD_GET_ACCOUNT_FUNDS,
                         serde_json::json!({}),
                     )
                     .await
                 {
                     Ok(funds) => {
                         let ts_init = reconnect_clock.get_time_ns();
+
                         match parse_account_state(
                             &funds,
                             reconnect_acct_id,
@@ -963,7 +994,7 @@ impl ExecutionClient for BetfairExecutionClient {
 
             let response: CurrentOrderSummaryReport = match self
                 .http_client
-                .send_betting("SportsAPING/v1.0/listCurrentOrders", &params)
+                .send_betting(METHOD_LIST_CURRENT_ORDERS, &params)
                 .await
             {
                 Ok(r) => r,
@@ -982,7 +1013,7 @@ impl ExecutionClient for BetfairExecutionClient {
                         }
                     }
                     self.http_client
-                        .send_betting("SportsAPING/v1.0/listCurrentOrders", &params)
+                        .send_betting(METHOD_LIST_CURRENT_ORDERS, &params)
                         .await
                         .map_err(|e| anyhow::anyhow!("{e}"))?
                 }
@@ -1063,7 +1094,7 @@ impl ExecutionClient for BetfairExecutionClient {
 
             let response: CurrentOrderSummaryReport = match self
                 .http_client
-                .send_betting("SportsAPING/v1.0/listCurrentOrders", &params)
+                .send_betting(METHOD_LIST_CURRENT_ORDERS, &params)
                 .await
             {
                 Ok(r) => r,
@@ -1082,7 +1113,7 @@ impl ExecutionClient for BetfairExecutionClient {
                         }
                     }
                     self.http_client
-                        .send_betting("SportsAPING/v1.0/listCurrentOrders", &params)
+                        .send_betting(METHOD_LIST_CURRENT_ORDERS, &params)
                         .await
                         .map_err(|e| anyhow::anyhow!("{e}"))?
                 }
@@ -1259,7 +1290,7 @@ impl ExecutionClient for BetfairExecutionClient {
 
         self.spawn_task("submit-order", async move {
             let report: PlaceExecutionReport = match http_client
-                .send_betting_order("SportsAPING/v1.0/placeOrders", &params)
+                .send_betting_order(METHOD_PLACE_ORDERS, &params)
                 .await
             {
                 Ok(r) => r,
@@ -1299,15 +1330,7 @@ impl ExecutionClient for BetfairExecutionClient {
             if let Some(instruction_reports) = &report.instruction_reports {
                 if let Some(ir) = instruction_reports.first() {
                     if ir.status == InstructionReportStatus::Failure {
-                        let reason = ir.error_code.map_or_else(
-                            || {
-                                report.error_code.map_or_else(
-                                    || "unknown error".to_string(),
-                                    |c| format!("{c:?}"),
-                                )
-                            },
-                            |c| format!("{c:?}"),
-                        );
+                        let reason = format_place_instruction_reason(ir, &report);
                         let ts_event = clock.get_time_ns();
                         emitter.emit_order_rejected_event(
                             strategy_id,
@@ -1331,9 +1354,12 @@ impl ExecutionClient for BetfairExecutionClient {
                 } else if report.status == ExecutionReportStatus::Failure
                     || report.status == ExecutionReportStatus::ProcessedWithErrors
                 {
-                    let reason = report
-                        .error_code
-                        .map_or_else(|| "unknown error".to_string(), |c| format!("{c:?}"));
+                    let reason = format_betfair_reason(
+                        report.error_message.as_deref(),
+                        report.error_code,
+                        None,
+                        "unknown error",
+                    );
                     let ts_event = clock.get_time_ns();
                     emitter.emit_order_rejected_event(
                         strategy_id,
@@ -1347,9 +1373,12 @@ impl ExecutionClient for BetfairExecutionClient {
             } else if report.status == ExecutionReportStatus::Failure
                 || report.status == ExecutionReportStatus::ProcessedWithErrors
             {
-                let reason = report
-                    .error_code
-                    .map_or_else(|| "unknown error".to_string(), |c| format!("{c:?}"));
+                let reason = format_betfair_reason(
+                    report.error_message.as_deref(),
+                    report.error_code,
+                    None,
+                    "unknown error",
+                );
                 let ts_event = clock.get_time_ns();
                 emitter.emit_order_rejected_event(
                     strategy_id,
@@ -1393,7 +1422,7 @@ impl ExecutionClient for BetfairExecutionClient {
 
         self.spawn_task("cancel-order", async move {
             let result: Result<CancelExecutionReport, _> = http_client
-                .send_betting_order("SportsAPING/v1.0/cancelOrders", &params)
+                .send_betting_order(METHOD_CANCEL_ORDERS, &params)
                 .await;
 
             let report = match result {
@@ -1441,9 +1470,11 @@ impl ExecutionClient for BetfairExecutionClient {
                                 continue;
                             }
 
-                            let reason = ir.error_code.map_or_else(
-                                || "unknown instruction error".to_string(),
-                                |c| format!("{c:?}"),
+                            let reason = format_cancel_instruction_reason(
+                                ir.error_message.as_deref(),
+                                ir.error_code,
+                                report.error_message.as_deref(),
+                                report.error_code,
                             );
                             let ts_event = clock.get_time_ns();
                             emitter.emit_order_cancel_rejected_event(
@@ -1459,9 +1490,12 @@ impl ExecutionClient for BetfairExecutionClient {
                     }
                 }
             } else if report.status != ExecutionReportStatus::Success {
-                let reason = report
-                    .error_code
-                    .map_or_else(|| "unknown error".to_string(), |c| format!("{c:?}"));
+                let reason = format_betfair_reason(
+                    report.error_message.as_deref(),
+                    report.error_code,
+                    None,
+                    "unknown error",
+                );
                 let ts_event = clock.get_time_ns();
                 emitter.emit_order_cancel_rejected_event(
                     strategy_id,
@@ -1547,7 +1581,7 @@ impl ExecutionClient for BetfairExecutionClient {
 
             self.spawn_task("modify-order-price", async move {
                 let result: Result<ReplaceExecutionReport, _> = http_client
-                    .send_betting_order("SportsAPING/v1.0/replaceOrders", &params)
+                    .send_betting_order(METHOD_REPLACE_ORDERS, &params)
                     .await;
 
                 match result {
@@ -1571,9 +1605,41 @@ impl ExecutionClient for BetfairExecutionClient {
                                 .pending_update_keys
                                 .remove(&(client_order_id, old_bet_id));
                         }
-                        let reason = report
-                            .error_code
-                            .map_or_else(|| "unknown error".to_string(), |c| format!("{c:?}"));
+
+                        if let Some(instruction_reports) = &report.instruction_reports
+                            && !instruction_reports.is_empty()
+                        {
+                            for ir in instruction_reports {
+                                match ir.status {
+                                    InstructionReportStatus::Success => {}
+                                    InstructionReportStatus::Timeout => {
+                                        log::warn!(
+                                            "Replace instruction timeout for {client_order_id}",
+                                        );
+                                    }
+                                    InstructionReportStatus::Failure => {
+                                        let reason = format_replace_instruction_reason(ir, &report);
+                                        let ts_event = clock.get_time_ns();
+                                        emitter.emit_order_modify_rejected_event(
+                                            strategy_id,
+                                            instrument_id,
+                                            client_order_id,
+                                            Some(venue_order_id),
+                                            &reason,
+                                            ts_event,
+                                        );
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                        }
+
+                        let reason = format_betfair_reason(
+                            report.error_message.as_deref(),
+                            report.error_code,
+                            None,
+                            "unknown error",
+                        );
                         let ts_event = clock.get_time_ns();
                         emitter.emit_order_modify_rejected_event(
                             strategy_id,
@@ -1635,14 +1701,17 @@ impl ExecutionClient for BetfairExecutionClient {
 
             self.spawn_task("modify-order-quantity", async move {
                 let result: Result<CancelExecutionReport, _> = http_client
-                    .send_betting_order("SportsAPING/v1.0/cancelOrders", &params)
+                    .send_betting_order(METHOD_CANCEL_ORDERS, &params)
                     .await;
 
                 match result {
                     Ok(report) if report.status != ExecutionReportStatus::Success => {
-                        let reason = report
-                            .error_code
-                            .map_or_else(|| "unknown error".to_string(), |c| format!("{c:?}"));
+                        let reason = format_betfair_reason(
+                            report.error_message.as_deref(),
+                            report.error_code,
+                            None,
+                            "unknown error",
+                        );
                         let ts_event = clock.get_time_ns();
                         emitter.emit_order_modify_rejected_event(
                             strategy_id,
@@ -1698,10 +1767,7 @@ impl ExecutionClient for BetfairExecutionClient {
 
         self.spawn_task("cancel-all-orders", async move {
             let result = http_client
-                .send_betting_order::<serde_json::Value, _>(
-                    "SportsAPING/v1.0/cancelOrders",
-                    &params,
-                )
+                .send_betting_order::<serde_json::Value, _>(METHOD_CANCEL_ORDERS, &params)
                 .await;
 
             if let Err(e) = result {
@@ -1773,12 +1839,13 @@ impl ExecutionClient for BetfairExecutionClient {
 
         self.spawn_task("batch-cancel-orders", async move {
             let report: CancelExecutionReport = match http_client
-                .send_betting_order("SportsAPING/v1.0/cancelOrders", &params)
+                .send_betting_order(METHOD_CANCEL_ORDERS, &params)
                 .await
             {
                 Ok(r) => r,
                 Err(e) => {
                     let ts_event = clock.get_time_ns();
+
                     for (strategy_id, instr_id, client_oid, venue_oid) in &cancel_data {
                         emitter.emit_order_cancel_rejected_event(
                             *strategy_id,
@@ -1794,12 +1861,16 @@ impl ExecutionClient for BetfairExecutionClient {
             };
 
             if report.status == ExecutionReportStatus::Failure {
-                let reason = report
-                    .error_code
-                    .map_or_else(|| "unknown error".to_string(), |c| format!("{c:?}"));
+                let reason = format_betfair_reason(
+                    report.error_message.as_deref(),
+                    report.error_code,
+                    None,
+                    "unknown error",
+                );
 
                 if report.instruction_reports.is_none() {
                     let ts_event = clock.get_time_ns();
+
                     for (strategy_id, instr_id, client_oid, venue_oid) in &cancel_data {
                         emitter.emit_order_cancel_rejected_event(
                             *strategy_id,
@@ -1831,9 +1902,11 @@ impl ExecutionClient for BetfairExecutionClient {
                                 continue;
                             }
 
-                            let reason = ir.error_code.map_or_else(
-                                || "unknown instruction error".to_string(),
-                                |c| format!("{c:?}"),
+                            let reason = format_cancel_instruction_reason(
+                                ir.error_message.as_deref(),
+                                ir.error_code,
+                                report.error_message.as_deref(),
+                                report.error_code,
                             );
                             let ts_event = clock.get_time_ns();
                             emitter.emit_order_cancel_rejected_event(
@@ -1997,7 +2070,7 @@ impl ExecutionClient for BetfairExecutionClient {
 
         self.spawn_task("submit-order-list", async move {
             let report: PlaceExecutionReport = match http_client
-                .send_betting_order("SportsAPING/v1.0/placeOrders", &params)
+                .send_betting_order(METHOD_PLACE_ORDERS, &params)
                 .await
             {
                 Ok(r) => r,
@@ -2011,6 +2084,7 @@ impl ExecutionClient for BetfairExecutionClient {
                     }
 
                     let ts_event = clock.get_time_ns();
+
                     for (client_oid, strategy_id, _) in &order_snapshots {
                         emitter.emit_order_rejected_event(
                             *strategy_id,
@@ -2026,12 +2100,16 @@ impl ExecutionClient for BetfairExecutionClient {
             };
 
             if report.status == ExecutionReportStatus::Failure {
-                let reason = report
-                    .error_code
-                    .map_or_else(|| "unknown error".to_string(), |c| format!("{c:?}"));
+                let reason = format_betfair_reason(
+                    report.error_message.as_deref(),
+                    report.error_code,
+                    None,
+                    "unknown error",
+                );
 
                 if report.instruction_reports.is_none() {
                     let ts_event = clock.get_time_ns();
+
                     for (client_oid, strategy_id, _) in &order_snapshots {
                         emitter.emit_order_rejected_event(
                             *strategy_id,
@@ -2076,10 +2154,7 @@ impl ExecutionClient for BetfairExecutionClient {
                             );
                         }
                         InstructionReportStatus::Failure => {
-                            let reason = ir.error_code.map_or_else(
-                                || "unknown instruction error".to_string(),
-                                |c| format!("{c:?}"),
-                            );
+                            let reason = format_place_instruction_reason(ir, &report);
                             let ts_event = clock.get_time_ns();
                             emitter.emit_order_rejected_event(
                                 *strategy_id,
@@ -2123,6 +2198,100 @@ fn should_emit_http_accept(
     true
 }
 
+fn format_betfair_reason(
+    error_message: Option<&str>,
+    error_code: Option<impl fmt::Debug>,
+    fallback: Option<String>,
+    unknown: &str,
+) -> String {
+    if let Some(message) = error_message
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+    {
+        return match error_code {
+            Some(code) => format!("{message} ({code:?})"),
+            None => message.to_string(),
+        };
+    }
+
+    error_code
+        .map(|code| format!("{code:?}"))
+        .or(fallback.filter(|s| !s.trim().is_empty()))
+        .unwrap_or_else(|| unknown.to_string())
+}
+
+fn format_place_instruction_reason(
+    instruction_report: &PlaceInstructionReport,
+    report: &PlaceExecutionReport,
+) -> String {
+    format_betfair_reason(
+        instruction_report.error_message.as_deref(),
+        instruction_report.error_code,
+        report_fallback(report.error_message.as_deref(), report.error_code),
+        "unknown error",
+    )
+}
+
+fn format_cancel_instruction_reason(
+    error_message: Option<&str>,
+    error_code: Option<InstructionReportErrorCode>,
+    report_error_message: Option<&str>,
+    report_error_code: Option<ExecutionReportErrorCode>,
+) -> String {
+    format_betfair_reason(
+        error_message,
+        error_code,
+        report_fallback(report_error_message, report_error_code),
+        "unknown instruction error",
+    )
+}
+
+fn format_replace_instruction_reason(
+    instruction_report: &ReplaceInstructionReport,
+    report: &ReplaceExecutionReport,
+) -> String {
+    let nested_reason = instruction_report
+        .place_instruction_report
+        .as_ref()
+        .and_then(|ir| instruction_fallback(ir.error_message.as_deref(), ir.error_code))
+        .or_else(|| {
+            instruction_report
+                .cancel_instruction_report
+                .as_ref()
+                .and_then(|ir| instruction_fallback(ir.error_message.as_deref(), ir.error_code))
+        });
+
+    format_betfair_reason(
+        instruction_report.error_message.as_deref(),
+        instruction_report.error_code,
+        nested_reason
+            .or_else(|| report_fallback(report.error_message.as_deref(), report.error_code)),
+        "unknown instruction error",
+    )
+}
+
+fn report_fallback(
+    error_message: Option<&str>,
+    error_code: Option<ExecutionReportErrorCode>,
+) -> Option<String> {
+    error_message
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| error_code.map(|code| format!("{code:?}")))
+}
+
+fn instruction_fallback(
+    error_message: Option<&str>,
+    error_code: Option<InstructionReportErrorCode>,
+) -> Option<String> {
+    error_message
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| error_code.map(|code| format!("{code:?}")))
+}
+
 #[cfg(test)]
 mod tests {
     use nautilus_model::types::Quantity;
@@ -2130,6 +2299,52 @@ mod tests {
     use rust_decimal::Decimal;
 
     use super::*;
+
+    #[rstest]
+    #[case(
+        Some("Price out of range"),
+        Some(InstructionReportErrorCode::InvalidOdds),
+        None,
+        "unknown",
+        "Price out of range (InvalidOdds)"
+    )]
+    #[case(
+        Some("Price out of range"),
+        None,
+        None,
+        "unknown",
+        "Price out of range"
+    )]
+    #[case(
+        None,
+        Some(InstructionReportErrorCode::ErrorInOrder),
+        None,
+        "unknown",
+        "ErrorInOrder"
+    )]
+    #[case(None, None, Some("report-level msg".to_string()), "unknown", "report-level msg")]
+    #[case(None, None, None, "unknown error", "unknown error")]
+    #[case(
+        Some("  "),
+        Some(InstructionReportErrorCode::ErrorInOrder),
+        None,
+        "unknown",
+        "ErrorInOrder"
+    )]
+    #[case(Some(""), None, Some(String::new()), "fallback", "fallback")]
+    #[case(Some("  \n "), None, Some("  ".to_string()), "unknown", "unknown")]
+    fn test_format_betfair_reason(
+        #[case] error_message: Option<&str>,
+        #[case] error_code: Option<InstructionReportErrorCode>,
+        #[case] fallback: Option<String>,
+        #[case] unknown: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            format_betfair_reason(error_message, error_code, fallback, unknown),
+            expected,
+        );
+    }
 
     #[rstest]
     fn test_ocm_state_register_and_resolve() {

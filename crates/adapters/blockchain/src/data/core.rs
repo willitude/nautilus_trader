@@ -17,7 +17,7 @@ use std::{cmp::max, sync::Arc};
 
 use futures_util::StreamExt;
 use nautilus_common::messages::DataEvent;
-use nautilus_core::formatting::Separable;
+use nautilus_core::{formatting::Separable, hex};
 use nautilus_model::defi::{
     Block, Blockchain, DexType, Pool, PoolIdentifier, PoolLiquidityUpdate, PoolProfiler, PoolSwap,
     SharedChain, SharedDex, SharedPool,
@@ -657,7 +657,7 @@ impl BlockchainDataClientCore {
         sync_result
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     async fn flush_event_batches(
         &self,
         event_batch_size: usize,

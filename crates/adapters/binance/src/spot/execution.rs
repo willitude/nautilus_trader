@@ -188,19 +188,23 @@ impl BinanceSpotExecutionClient {
             .await
     }
 
-    fn update_account_state(&self) -> anyhow::Result<()> {
-        let runtime = get_runtime();
-        let account_state = runtime.block_on(self.refresh_account_state())?;
+    fn update_account_state(&self) {
+        let http_client = self.http_client.clone();
+        let account_id = self.core.account_id;
+        let emitter = self.emitter.clone();
+        let clock = self.clock;
 
-        let ts_now = self.clock.get_time_ns();
-        self.emitter.emit_account_state(
-            account_state.balances.clone(),
-            account_state.margins.clone(),
-            account_state.is_reported,
-            ts_now,
-        );
-
-        Ok(())
+        self.spawn_task("query_account", async move {
+            let account_state = http_client.request_account_state(account_id).await?;
+            let ts_now = clock.get_time_ns();
+            emitter.emit_account_state(
+                account_state.balances.clone(),
+                account_state.margins.clone(),
+                account_state.is_reported,
+                ts_now,
+            );
+            Ok(())
+        });
     }
 
     /// Returns whether the WS trading client is connected and active.
@@ -244,6 +248,7 @@ impl BinanceSpotExecutionClient {
                 strategy_id,
                 order_side,
                 order_type,
+                price,
             },
         );
 
@@ -647,7 +652,8 @@ impl ExecutionClient for BinanceSpotExecutionClient {
     }
 
     fn query_account(&self, _cmd: &QueryAccount) -> anyhow::Result<()> {
-        self.update_account_state()
+        self.update_account_state();
+        Ok(())
     }
 
     fn query_order(&self, cmd: &QueryOrder) -> anyhow::Result<()> {
@@ -1198,6 +1204,7 @@ impl ExecutionClient for BinanceSpotExecutionClient {
                     Ok(results) => {
                         for (i, result) in results.iter().enumerate() {
                             let cancel = &chunk[i];
+
                             match result {
                                 BatchCancelResult::Success(success) => {
                                     let venue_order_id =
@@ -1274,7 +1281,7 @@ impl ExecutionClient for BinanceSpotExecutionClient {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn dispatch_ws_trading_message(
     msg: BinanceSpotWsTradingMessage,
     emitter: &ExecutionEventEmitter,
@@ -1464,6 +1471,7 @@ fn dispatch_ws_trading_message(
             );
             let http_client = http_client.clone();
             let emitter = emitter.clone();
+
             get_runtime().spawn(async move {
                 match http_client.request_account_state(account_id).await {
                     Ok(state) => emitter.send_account_state(state),
@@ -1611,7 +1619,6 @@ fn build_cancel_replace_params(
 ///
 /// Tracked orders (with registered identity) produce proper order events.
 /// Untracked orders fall back to execution reports for reconciliation.
-#[allow(clippy::too_many_arguments)]
 fn dispatch_execution_report(
     report: &BinanceSpotExecutionReport,
     emitter: &ExecutionEventEmitter,
@@ -1667,7 +1674,7 @@ fn dispatch_execution_report(
 }
 
 /// Dispatches a tracked execution report as proper order events.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn dispatch_tracked_execution_report(
     report: &BinanceSpotExecutionReport,
     emitter: &ExecutionEventEmitter,
@@ -1866,7 +1873,7 @@ fn dispatch_tracked_execution_report(
 }
 
 /// Dispatches an untracked execution report as execution reports for reconciliation.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn dispatch_untracked_execution_report(
     report: &BinanceSpotExecutionReport,
     emitter: &ExecutionEventEmitter,
@@ -2111,6 +2118,7 @@ mod tests {
                 strategy_id: StrategyId::from("TEST-STRATEGY"),
                 order_side: OrderSide::Buy,
                 order_type: OrderType::Limit,
+                price: None,
             },
         );
         dispatch_state

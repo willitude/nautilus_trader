@@ -26,7 +26,7 @@ use pyo3::{conversion::IntoPyObjectExt, prelude::*, types::PyDict};
 
 use crate::{
     broadcast::submitter::{SubmitBroadcaster, SubmitBroadcasterConfig},
-    common::enums::BitmexPegPriceType,
+    common::enums::{BitmexEnvironment, BitmexPegPriceType},
 };
 
 #[pymethods]
@@ -43,7 +43,7 @@ impl SubmitBroadcaster {
         api_key=None,
         api_secret=None,
         base_url=None,
-        testnet=false,
+        environment=BitmexEnvironment::Mainnet,
         timeout_secs=60,
         max_retries=3,
         retry_delay_ms=1_000,
@@ -55,13 +55,13 @@ impl SubmitBroadcaster {
         health_check_timeout_secs=5,
         expected_reject_patterns=None
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_new(
         pool_size: usize,
         api_key: Option<String>,
         api_secret: Option<String>,
         base_url: Option<String>,
-        testnet: bool,
+        environment: BitmexEnvironment,
         timeout_secs: u64,
         max_retries: u32,
         retry_delay_ms: u64,
@@ -78,7 +78,7 @@ impl SubmitBroadcaster {
             api_key,
             api_secret,
             base_url,
-            testnet,
+            environment,
             timeout_secs,
             max_retries,
             retry_delay_ms,
@@ -147,7 +147,7 @@ impl SubmitBroadcaster {
         peg_price_type=None,
         peg_offset_value=None
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_broadcast_submit<'py>(
         &self,
         py: Python<'py>,

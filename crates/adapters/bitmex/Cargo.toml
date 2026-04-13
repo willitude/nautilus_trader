@@ -65,7 +65,6 @@ chrono = { workspace = true }
 dashmap = { workspace = true }
 derive_builder = { workspace = true }
 futures-util = { workspace = true }
-hex = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 rust_decimal = { workspace = true }
@@ -99,16 +98,19 @@ url = { workspace = true }
 name = "bitmex-http"
 path = "bin/http.rs"
 doc = false
+test = false
 
 [[bin]]
 name = "bitmex-ws-data"
 path = "bin/ws_data.rs"
 doc = false
+test = false
 
 [[bin]]
 name = "bitmex-ws-exec"
 path = "bin/ws_exec.rs"
 doc = false
+test = false
 
 # Run with `cargo run --example bitmex-data-tester --package nautilus-bitmex`
 [[example]]

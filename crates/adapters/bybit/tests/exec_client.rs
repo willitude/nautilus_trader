@@ -750,6 +750,49 @@ async fn test_exec_client_query_order() {
 
 #[rstest]
 #[tokio::test]
+async fn test_query_account_does_not_block_within_runtime() {
+    use nautilus_common::messages::execution::QueryAccount;
+
+    let (addr, _state) = start_test_server().await.unwrap();
+    let (mut client, mut rx, cache) = create_test_execution_client(addr);
+    add_test_account_to_cache(&cache, AccountId::from("BYBIT-001"));
+
+    client.connect().await.unwrap();
+    client.start().unwrap();
+
+    wait_until_async(|| async { client.is_connected() }, Duration::from_secs(10)).await;
+
+    // Drain connection events (account state, subscriptions)
+    while tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        .await
+        .is_ok()
+    {}
+
+    let cmd = QueryAccount::new(
+        TraderId::from("TESTER-001"),
+        Some(ClientId::from("BYBIT")),
+        AccountId::from("BYBIT-001"),
+        UUID4::new(),
+        UnixNanos::default(),
+    );
+
+    client.query_account(&cmd).unwrap();
+
+    let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("timed out waiting for query_account event")
+        .expect("channel closed");
+
+    assert!(
+        matches!(event, ExecutionEvent::Account(_)),
+        "Expected ExecutionEvent::Account, was {event:?}"
+    );
+
+    client.disconnect().await.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
 async fn test_exec_client_submit_order_list_demo() {
     use nautilus_common::messages::execution::SubmitOrderList;
     use nautilus_model::orders::OrderList;
@@ -899,6 +942,7 @@ async fn test_exec_client_submit_order_list_demo() {
     client.submit_order_list(&cmd).unwrap();
 
     let mut submitted_count = 0;
+
     for _ in 0..2 {
         let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
             .await
@@ -1079,6 +1123,7 @@ async fn test_exec_client_submit_order_list_denies_all_on_invalid_leg() {
 
     // Both orders should be denied (not just the invalid one)
     let mut denied_count = 0;
+
     for _ in 0..2 {
         match tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
             Ok(Some(ExecutionEvent::Order(ref event)))

@@ -31,7 +31,10 @@ use nautilus_model::{
 use pyo3::{prelude::*, types::PyList};
 use serde_json::to_string;
 
-use crate::http::{client::HyperliquidHttpClient, parse::HyperliquidMarketType};
+use crate::{
+    common::enums::HyperliquidEnvironment,
+    http::{client::HyperliquidHttpClient, parse::HyperliquidMarketType},
+};
 
 #[pymethods]
 #[pyo3_stub_gen::derive::gen_stub_pymethods]
@@ -42,12 +45,12 @@ impl HyperliquidHttpClient {
     /// with Nautilus domain types. It maintains an instrument cache and handles conversions
     /// between Hyperliquid API responses and Nautilus domain models.
     #[new]
-    #[pyo3(signature = (private_key=None, vault_address=None, account_address=None, is_testnet=false, timeout_secs=60, proxy_url=None, normalize_prices=true))]
+    #[pyo3(signature = (private_key=None, vault_address=None, account_address=None, environment=HyperliquidEnvironment::Mainnet, timeout_secs=60, proxy_url=None, normalize_prices=true))]
     fn py_new(
         private_key: Option<String>,
         vault_address: Option<String>,
         account_address: Option<String>,
-        is_testnet: bool,
+        environment: HyperliquidEnvironment,
         timeout_secs: u64,
         proxy_url: Option<String>,
         normalize_prices: bool,
@@ -56,7 +59,7 @@ impl HyperliquidHttpClient {
             private_key,
             vault_address,
             account_address,
-            is_testnet,
+            environment,
             timeout_secs,
             proxy_url,
         )
@@ -71,25 +74,25 @@ impl HyperliquidHttpClient {
     ///
     /// Returns `Error.Auth` if required environment variables are not set.
     #[staticmethod]
-    #[pyo3(name = "from_env", signature = (is_testnet=false))]
-    fn py_from_env(is_testnet: bool) -> PyResult<Self> {
-        Self::from_env(is_testnet).map_err(to_pyvalue_err)
+    #[pyo3(name = "from_env", signature = (environment=HyperliquidEnvironment::Mainnet))]
+    fn py_from_env(environment: HyperliquidEnvironment) -> PyResult<Self> {
+        Self::from_env(environment).map_err(to_pyvalue_err)
     }
 
     /// Creates a new `HyperliquidHttpClient` configured with explicit credentials.
     #[staticmethod]
-    #[pyo3(name = "from_credentials", signature = (private_key, vault_address=None, is_testnet=false, timeout_secs=60, proxy_url=None))]
+    #[pyo3(name = "from_credentials", signature = (private_key, vault_address=None, environment=HyperliquidEnvironment::Mainnet, timeout_secs=60, proxy_url=None))]
     fn py_from_credentials(
         private_key: &str,
         vault_address: Option<&str>,
-        is_testnet: bool,
+        environment: HyperliquidEnvironment,
         timeout_secs: u64,
         proxy_url: Option<String>,
     ) -> PyResult<Self> {
         Self::from_credentials(
             private_key,
             vault_address,
-            is_testnet,
+            environment,
             timeout_secs,
             proxy_url,
         )
@@ -280,7 +283,7 @@ impl HyperliquidHttpClient {
         post_only=false,
         reduce_only=false,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_submit_order<'py>(
         &self,
         py: Python<'py>,
@@ -350,7 +353,7 @@ impl HyperliquidHttpClient {
     /// The HL modify API requires a full replacement order spec plus the
     /// venue order ID. The caller must provide all order fields.
     #[pyo3(name = "modify_order")]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_modify_order<'py>(
         &self,
         py: Python<'py>,

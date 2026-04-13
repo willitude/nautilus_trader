@@ -24,6 +24,7 @@ __all__ = [
     "Environment",
     "FifoCache",
     "FileWriterConfig",
+    "GreeksCalculator",
     "ImportableActorConfig",
     "LogColor",
     "LogFormat",
@@ -721,6 +722,12 @@ class DataActor:
         client_id: model.ClientId | None = None,
         params: dict | None = None,
     ) -> None: ...
+    def subscribe_option_greeks(
+        self,
+        instrument_id: model.InstrumentId,
+        client_id: model.ClientId | None = None,
+        params: dict | None = None,
+    ) -> None: ...
     def subscribe_instrument_status(
         self,
         instrument_id: model.InstrumentId,
@@ -733,67 +740,15 @@ class DataActor:
         client_id: model.ClientId | None = None,
         params: dict | None = None,
     ) -> None: ...
+    def subscribe_option_chain(
+        self,
+        series_id: model.OptionSeriesId,
+        strike_range: model.StrikeRange,
+        snapshot_interval_ms: int | None = None,
+        client_id: model.ClientId | None = None,
+    ) -> None: ...
     def subscribe_order_fills(self, instrument_id: model.InstrumentId) -> None: ...
     def subscribe_order_cancels(self, instrument_id: model.InstrumentId) -> None: ...
-    def request_data(
-        self,
-        data_type: model.DataType,
-        client_id: model.ClientId,
-        start: int | None = None,
-        end: int | None = None,
-        limit: int | None = None,
-        params: dict | None = None,
-    ) -> str: ...
-    def request_instrument(
-        self,
-        instrument_id: model.InstrumentId,
-        start: int | None = None,
-        end: int | None = None,
-        client_id: model.ClientId | None = None,
-        params: dict | None = None,
-    ) -> str: ...
-    def request_instruments(
-        self,
-        venue: model.Venue | None = None,
-        start: int | None = None,
-        end: int | None = None,
-        client_id: model.ClientId | None = None,
-        params: dict | None = None,
-    ) -> str: ...
-    def request_book_snapshot(
-        self,
-        instrument_id: model.InstrumentId,
-        depth: int | None = None,
-        client_id: model.ClientId | None = None,
-        params: dict | None = None,
-    ) -> str: ...
-    def request_quotes(
-        self,
-        instrument_id: model.InstrumentId,
-        start: int | None = None,
-        end: int | None = None,
-        limit: int | None = None,
-        client_id: model.ClientId | None = None,
-        params: dict | None = None,
-    ) -> str: ...
-    def request_trades(
-        self,
-        instrument_id: model.InstrumentId,
-        start: int | None = None,
-        end: int | None = None,
-        limit: int | None = None,
-        client_id: model.ClientId | None = None,
-        params: dict | None = None,
-    ) -> str: ...
-    def request_bars(
-        self,
-        bar_type: model.BarType,
-        start: int | None = None,
-        end: int | None = None,
-        limit: int | None = None,
-        client_id: model.ClientId | None = None,
-        params: dict | None = None,
-    ) -> str: ...
     def unsubscribe_data(
         self,
         data_type: model.DataType,
@@ -855,6 +810,18 @@ class DataActor:
         client_id: model.ClientId | None = None,
         params: dict | None = None,
     ) -> None: ...
+    def unsubscribe_funding_rates(
+        self,
+        instrument_id: model.InstrumentId,
+        client_id: model.ClientId | None = None,
+        params: dict | None = None,
+    ) -> None: ...
+    def unsubscribe_option_greeks(
+        self,
+        instrument_id: model.InstrumentId,
+        client_id: model.ClientId | None = None,
+        params: dict | None = None,
+    ) -> None: ...
     def unsubscribe_instrument_status(
         self,
         instrument_id: model.InstrumentId,
@@ -867,11 +834,85 @@ class DataActor:
         client_id: model.ClientId | None = None,
         params: dict | None = None,
     ) -> None: ...
+    def unsubscribe_option_chain(
+        self, series_id: model.OptionSeriesId, client_id: model.ClientId | None = None
+    ) -> None: ...
     def unsubscribe_order_fills(self, instrument_id: model.InstrumentId) -> None: ...
     def unsubscribe_order_cancels(self, instrument_id: model.InstrumentId) -> None: ...
+    def request_data(
+        self,
+        data_type: model.DataType,
+        client_id: model.ClientId,
+        start: int | None = None,
+        end: int | None = None,
+        limit: int | None = None,
+        params: dict | None = None,
+    ) -> str: ...
+    def request_instrument(
+        self,
+        instrument_id: model.InstrumentId,
+        start: int | None = None,
+        end: int | None = None,
+        client_id: model.ClientId | None = None,
+        params: dict | None = None,
+    ) -> str: ...
+    def request_instruments(
+        self,
+        venue: model.Venue | None = None,
+        start: int | None = None,
+        end: int | None = None,
+        client_id: model.ClientId | None = None,
+        params: dict | None = None,
+    ) -> str: ...
+    def request_book_snapshot(
+        self,
+        instrument_id: model.InstrumentId,
+        depth: int | None = None,
+        client_id: model.ClientId | None = None,
+        params: dict | None = None,
+    ) -> str: ...
+    def request_quotes(
+        self,
+        instrument_id: model.InstrumentId,
+        start: int | None = None,
+        end: int | None = None,
+        limit: int | None = None,
+        client_id: model.ClientId | None = None,
+        params: dict | None = None,
+    ) -> str: ...
+    def request_trades(
+        self,
+        instrument_id: model.InstrumentId,
+        start: int | None = None,
+        end: int | None = None,
+        limit: int | None = None,
+        client_id: model.ClientId | None = None,
+        params: dict | None = None,
+    ) -> str: ...
+    def request_funding_rates(
+        self,
+        instrument_id: model.InstrumentId,
+        start: int | None = None,
+        end: int | None = None,
+        limit: int | None = None,
+        client_id: model.ClientId | None = None,
+        params: dict | None = None,
+    ) -> str: ...
+    def request_bars(
+        self,
+        bar_type: model.BarType,
+        start: int | None = None,
+        end: int | None = None,
+        limit: int | None = None,
+        client_id: model.ClientId | None = None,
+        params: dict | None = None,
+    ) -> str: ...
     def on_historical_data(self, data: typing.Any) -> None: ...
     def on_historical_quotes(self, quotes: typing.Sequence[model.QuoteTick]) -> None: ...
     def on_historical_trades(self, trades: typing.Sequence[model.TradeTick]) -> None: ...
+    def on_historical_funding_rates(
+        self, funding_rates: typing.Sequence[model.FundingRateUpdate]
+    ) -> None: ...
     def on_historical_bars(self, bars: typing.Sequence[model.Bar]) -> None: ...
     def on_historical_mark_prices(
         self, mark_prices: typing.Sequence[model.MarkPriceUpdate]
@@ -962,6 +1003,73 @@ class FifoCache:
     def add(self, key: str) -> None: ...
     def remove(self, key: str) -> None: ...
     def clear(self) -> None: ...
+
+@typing.final
+class GreeksCalculator:
+    def __init__(self, cache: Cache, clock: Clock) -> None: ...
+    def instrument_greeks(
+        self,
+        instrument_id: model.InstrumentId,
+        flat_interest_rate: float = 0.0425,
+        flat_dividend_yield: float | None = None,
+        spot_shock: float = 0.0,
+        vol_shock: float = 0.0,
+        time_to_expiry_shock: float = 0.0,
+        use_cached_greeks: bool = False,
+        update_vol: bool = False,
+        cache_greeks: bool = False,
+        ts_event: int = 0,
+        position: model.Position | None = None,
+        percent_greeks: bool = False,
+        index_instrument_id: model.InstrumentId | None = None,
+        beta_weights: typing.Mapping[model.InstrumentId, float] | None = None,
+        vega_time_weight_base: int | None = None,
+    ) -> model.GreeksData: ...
+    def modify_greeks(
+        self,
+        delta_input: float,
+        gamma_input: float,
+        underlying_instrument_id: model.InstrumentId,
+        underlying_price: float,
+        unshocked_underlying_price: float,
+        percent_greeks: bool,
+        index_instrument_id: model.InstrumentId | None = None,
+        beta_weights: typing.Mapping[model.InstrumentId, float] | None = None,
+        vega_input: float = 0.0,
+        vol: float = 0.0,
+        expiry_in_days: int = 0,
+        vega_time_weight_base: int | None = None,
+    ) -> tuple[float, float, float]: ...
+    def portfolio_greeks(
+        self,
+        underlyings: typing.Sequence[str] | None = None,
+        venue: model.Venue | None = None,
+        instrument_id: model.InstrumentId | None = None,
+        strategy_id: model.StrategyId | None = None,
+        side: model.PositionSide | None = None,
+        flat_interest_rate: float = 0.0425,
+        flat_dividend_yield: float | None = None,
+        spot_shock: float = 0.0,
+        vol_shock: float = 0.0,
+        time_to_expiry_shock: float = 0.0,
+        use_cached_greeks: bool = False,
+        update_vol: bool = False,
+        cache_greeks: bool = False,
+        percent_greeks: bool = False,
+        index_instrument_id: model.InstrumentId | None = None,
+        beta_weights: typing.Mapping[model.InstrumentId, float] | None = None,
+        greeks_filter: typing.Any | None = None,
+        vega_time_weight_base: int | None = None,
+    ) -> model.PortfolioGreeks: ...
+    def cache_futures_spread(
+        self,
+        call_instrument_id: model.InstrumentId,
+        put_instrument_id: model.InstrumentId,
+        futures_instrument_id: model.InstrumentId,
+    ) -> model.Price: ...
+    def get_cached_futures_spread_price(
+        self, underlying_instrument_id: model.InstrumentId
+    ) -> model.Price | None: ...
 
 @typing.final
 class Logger:

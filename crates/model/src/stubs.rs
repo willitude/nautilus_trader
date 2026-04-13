@@ -46,6 +46,7 @@ pub trait TestDefault {
 /// This function panics if:
 /// - The liquidity side is `NoLiquiditySide`.
 /// - `instrument.maker_fee()` or `instrument.taker_fee()` cannot be converted to `f64`.
+#[must_use]
 pub fn calculate_commission(
     instrument: &InstrumentAny,
     last_qty: Quantity,
@@ -138,7 +139,7 @@ pub fn stub_order_book_mbp_appl_xnas() -> OrderBook {
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 #[must_use]
 pub fn stub_order_book_mbp(
     instrument_id: InstrumentId,

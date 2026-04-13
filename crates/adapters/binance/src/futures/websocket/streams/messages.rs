@@ -43,7 +43,6 @@ use crate::{
 /// events. The data and execution client layers convert these to Nautilus
 /// domain types using parse functions with instrument context.
 #[derive(Debug, Clone)]
-#[allow(clippy::large_enum_variant)]
 pub enum BinanceFuturesWsStreamsMessage {
     /// Aggregate trade stream.
     AggTrade(BinanceFuturesAggTradeMsg),
@@ -90,10 +89,6 @@ pub struct BinanceFuturesWsErrorMsg {
 
 /// Handler command for data client-handler communication.
 #[derive(Debug)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "Commands are ephemeral and immediately consumed"
-)]
 pub enum BinanceFuturesWsStreamsCommand {
     /// Set the WebSocket client reference.
     SetClient(WebSocketClient),
@@ -107,7 +102,7 @@ pub enum BinanceFuturesWsStreamsCommand {
 
 /// Handler command for execution client-handler communication.
 #[derive(Debug)]
-#[allow(
+#[expect(
     clippy::large_enum_variant,
     reason = "Commands are ephemeral and immediately consumed"
 )]
@@ -566,6 +561,7 @@ pub enum AccountUpdateReason {
     OptionsPremiumFee,
     OptionsSettleProfit,
     AutoExchange,
+    Adl,
     CoinSwapDeposit,
     CoinSwapWithdraw,
     #[serde(other)]
@@ -988,4 +984,23 @@ pub struct BinanceFuturesListenKeyExpiredMsg {
     /// Event time in milliseconds.
     #[serde(rename = "E")]
     pub event_time: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    fn test_account_update_reason_adl_deserializes() {
+        let value: AccountUpdateReason = serde_json::from_str("\"ADL\"").unwrap();
+        assert_eq!(value, AccountUpdateReason::Adl);
+    }
+
+    #[rstest]
+    fn test_account_update_reason_unknown_fallback() {
+        let value: AccountUpdateReason = serde_json::from_str("\"SOMETHING_NEW\"").unwrap();
+        assert_eq!(value, AccountUpdateReason::Unknown);
+    }
 }

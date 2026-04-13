@@ -203,6 +203,7 @@ impl RiskEngine {
                         );
 
                         let timestamp = clock.borrow().timestamp_ns();
+
                         for order in &orders {
                             if order.status() == OrderStatus::Initialized {
                                 let denied = OrderEventAny::Denied(OrderDenied::new(
@@ -347,14 +348,14 @@ impl RiskEngine {
     }
 
     /// Executes a trading command through the risk management pipeline.
-    #[allow(clippy::needless_pass_by_value)] // Required by message bus dispatch
+    // Required by message bus dispatch
     pub fn execute(&mut self, command: TradingCommand) {
         // This will extend to other commands such as `RiskCommand`
         self.handle_command(command);
     }
 
     /// Processes an order event for risk monitoring and state updates.
-    #[allow(clippy::needless_pass_by_value)] // Required by message bus dispatch
+    #[expect(clippy::needless_pass_by_value)] // Required by message bus dispatch
     pub fn process(&mut self, event: OrderEventAny) {
         // This will extend to other events such as `RiskEvent`
         self.handle_event(&event);
@@ -933,6 +934,7 @@ impl RiskEngine {
         let mut cum_notional_sell: Option<Money> = None;
         let mut cum_margin_required: Option<Money> = None;
         let mut base_currency: Option<Currency> = None;
+
         for order in orders {
             // Determine last price based on order type
             last_px = match order {
@@ -1714,6 +1716,7 @@ impl RiskEngine {
                             &submit_order_list.order_list.client_order_ids,
                             &submit_order_list,
                         );
+
                         for order in &orders {
                             if order.is_buy() && self.portfolio.is_net_long(&instrument.id()) {
                                 self.deny_order_list(

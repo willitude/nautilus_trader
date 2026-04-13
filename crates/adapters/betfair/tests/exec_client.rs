@@ -28,7 +28,11 @@ use std::{
     time::Duration,
 };
 
-use nautilus_betfair::{config::BetfairExecConfig, execution::BetfairExecutionClient};
+use nautilus_betfair::{
+    common::consts::{METHOD_CANCEL_ORDERS, METHOD_LIST_CURRENT_ORDERS, METHOD_PLACE_ORDERS},
+    config::BetfairExecConfig,
+    execution::BetfairExecutionClient,
+};
 use nautilus_common::{
     cache::Cache,
     clients::ExecutionClient,
@@ -61,7 +65,6 @@ use serde_json::Value;
 
 use crate::common::*;
 
-#[allow(clippy::type_complexity)]
 fn create_test_execution_client(
     addr: SocketAddr,
     stream_port: u16,
@@ -185,6 +188,7 @@ async fn test_exec_client_connect_emits_account_state() {
     client.connect().await.unwrap();
 
     let mut found_account_state = false;
+
     while let Ok(event) = rx.try_recv() {
         if matches!(event, ExecutionEvent::Account(_)) {
             found_account_state = true;
@@ -209,6 +213,7 @@ async fn test_ocm_handler_emits_order_status_report() {
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
 
     let ocm_fixture = load_fixture("stream/ocm_FILLED.json");
+
     let server = tokio::spawn(async move {
         let (mut reader, mut write_half) = accept_and_auth(&listener).await;
 
@@ -255,6 +260,7 @@ async fn test_ocm_voided_order_emits_data_event() {
     let (mut client, _rx, mut data_rx, _cache) = create_test_execution_client(addr, stream_port);
 
     let ocm_fixture = load_fixture("stream/ocm_VOIDED.json");
+
     let server = tokio::spawn(async move {
         let (mut reader, mut write_half) = accept_and_auth(&listener).await;
 
@@ -275,6 +281,7 @@ async fn test_ocm_voided_order_emits_data_event() {
     });
 
     client.connect().await.unwrap();
+
     while data_rx.try_recv().is_ok() {}
 
     let event = tokio::time::timeout(Duration::from_secs(5), data_rx.recv())
@@ -316,10 +323,11 @@ async fn test_cancel_order_bet_taken_or_lapsed_treated_as_success() {
 
     let fixture = load_fixture("rest/betting_cancel_orders_bet_taken_or_lapsed.json");
     let v: Value = serde_json::from_str(&fixture).unwrap();
-    state.betting_overrides.lock().unwrap().insert(
-        "SportsAPING/v1.0/cancelOrders".to_string(),
-        v["result"].clone(),
-    );
+    state
+        .betting_overrides
+        .lock()
+        .unwrap()
+        .insert(METHOD_CANCEL_ORDERS.to_string(), v["result"].clone());
 
     let (stream_port, listener) = start_mock_stream().await;
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
@@ -331,6 +339,7 @@ async fn test_cancel_order_bet_taken_or_lapsed_treated_as_success() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let cmd = make_cancel_order("1.179082386-235-0.BETFAIR", "O-001", "1");
@@ -354,11 +363,14 @@ async fn test_cancel_order_instruction_failure_emits_rejected() {
     let (addr, state) = start_mock_http().await;
 
     let fixture = load_fixture("rest/betting_cancel_orders_error.json");
-    let v: Value = serde_json::from_str(&fixture).unwrap();
-    state.betting_overrides.lock().unwrap().insert(
-        "SportsAPING/v1.0/cancelOrders".to_string(),
-        v["result"].clone(),
-    );
+    let mut v: Value = serde_json::from_str(&fixture).unwrap();
+    v["result"]["instructionReports"][0]["errorMessage"] =
+        Value::String("Betfair returned a detailed cancel validation error".to_string());
+    state
+        .betting_overrides
+        .lock()
+        .unwrap()
+        .insert(METHOD_CANCEL_ORDERS.to_string(), v["result"].clone());
 
     let (stream_port, listener) = start_mock_stream().await;
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
@@ -370,6 +382,7 @@ async fn test_cancel_order_instruction_failure_emits_rejected() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let cmd = make_cancel_order("1.179082386-235-0.BETFAIR", "O-002", "1");
@@ -384,10 +397,14 @@ async fn test_cancel_order_instruction_failure_emits_rejected() {
         ExecutionEvent::Order(OrderEventAny::CancelRejected(rejected)) => {
             assert_eq!(rejected.client_order_id, ClientOrderId::from("O-002"));
             assert!(
-                rejected.reason.as_str().contains("ErrorInOrder"),
-                "Expected ErrorInOrder reason, found: {}",
+                rejected
+                    .reason
+                    .as_str()
+                    .contains("Betfair returned a detailed cancel validation error"),
+                "Expected detailed Betfair error message, found: {}",
                 rejected.reason,
             );
+            assert!(rejected.reason.as_str().contains("ErrorInOrder"));
         }
         other => panic!("Expected CancelRejected event, found: {other:?}"),
     }
@@ -403,10 +420,11 @@ async fn test_cancel_order_result_failure_no_instructions_emits_rejected() {
 
     let fixture = load_fixture("rest/betting_cancel_orders_result_failure.json");
     let v: Value = serde_json::from_str(&fixture).unwrap();
-    state.betting_overrides.lock().unwrap().insert(
-        "SportsAPING/v1.0/cancelOrders".to_string(),
-        v["result"].clone(),
-    );
+    state
+        .betting_overrides
+        .lock()
+        .unwrap()
+        .insert(METHOD_CANCEL_ORDERS.to_string(), v["result"].clone());
 
     let (stream_port, listener) = start_mock_stream().await;
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
@@ -418,6 +436,7 @@ async fn test_cancel_order_result_failure_no_instructions_emits_rejected() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let cmd = make_cancel_order("1.179082386-235-0.BETFAIR", "O-003", "1");
@@ -451,10 +470,11 @@ async fn test_cancel_order_success_no_rejected_event() {
 
     let fixture = load_fixture("rest/betting_cancel_orders_success.json");
     let v: Value = serde_json::from_str(&fixture).unwrap();
-    state.betting_overrides.lock().unwrap().insert(
-        "SportsAPING/v1.0/cancelOrders".to_string(),
-        v["result"].clone(),
-    );
+    state
+        .betting_overrides
+        .lock()
+        .unwrap()
+        .insert(METHOD_CANCEL_ORDERS.to_string(), v["result"].clone());
 
     let (stream_port, listener) = start_mock_stream().await;
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
@@ -466,6 +486,7 @@ async fn test_cancel_order_success_no_rejected_event() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let cmd = make_cancel_order("1.179082386-235-0.BETFAIR", "O-004", "1");
@@ -533,6 +554,7 @@ async fn test_submit_order_success_emits_accepted() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let order = make_test_order("1.181005744-86362-0.BETFAIR", "O-SUBMIT-001", "2.58", "10");
@@ -575,11 +597,14 @@ async fn test_submit_order_error_emits_rejected() {
     let (addr, state) = start_mock_http().await;
 
     let fixture = load_fixture("rest/betting_place_order_error.json");
-    let v: Value = serde_json::from_str(&fixture).unwrap();
-    state.betting_overrides.lock().unwrap().insert(
-        "SportsAPING/v1.0/placeOrders".to_string(),
-        v["result"].clone(),
-    );
+    let mut v: Value = serde_json::from_str(&fixture).unwrap();
+    v["result"]["instructionReports"][0]["errorMessage"] =
+        Value::String("Betfair returned a detailed submit validation error".to_string());
+    state
+        .betting_overrides
+        .lock()
+        .unwrap()
+        .insert(METHOD_PLACE_ORDERS.to_string(), v["result"].clone());
 
     let (stream_port, listener) = start_mock_stream().await;
     let (mut client, mut rx, _data_rx, cache) = create_test_execution_client(addr, stream_port);
@@ -591,6 +616,7 @@ async fn test_submit_order_error_emits_rejected() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let order = make_test_order("1.181106170-235-0.BETFAIR", "O-SUBMIT-002", "1.80", "10");
@@ -615,6 +641,15 @@ async fn test_submit_order_error_emits_rejected() {
                 rejected.client_order_id,
                 ClientOrderId::from("O-SUBMIT-002")
             );
+            assert!(
+                rejected
+                    .reason
+                    .as_str()
+                    .contains("Betfair returned a detailed submit validation error"),
+                "Expected detailed Betfair error message, found: {}",
+                rejected.reason,
+            );
+            assert!(rejected.reason.as_str().contains("ErrorInOrder"));
         }
         other => panic!("Expected OrderRejected event, found: {other:?}"),
     }
@@ -637,6 +672,7 @@ async fn test_modify_order_price_and_quantity_rejects() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let order = make_test_order("1.179082386-235-0.BETFAIR", "O-MOD-001", "2.58", "10");
@@ -696,6 +732,7 @@ async fn test_modify_order_no_effective_change_rejects() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let order = make_test_order("1.179082386-235-0.BETFAIR", "O-MOD-002", "2.58", "10");
@@ -752,6 +789,7 @@ async fn test_cancel_all_orders_sends_request() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let cmd = CancelAllOrders::new(
@@ -774,7 +812,7 @@ async fn test_cancel_all_orders_sends_request() {
                     .lock()
                     .unwrap()
                     .iter()
-                    .any(|m| m == "SportsAPING/v1.0/cancelOrders")
+                    .any(|m| m == METHOD_CANCEL_ORDERS)
             }
         },
         Duration::from_secs(5),
@@ -799,6 +837,7 @@ async fn test_ocm_handler_emits_cancel_event() {
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
 
     let ocm_fixture = load_fixture("stream/ocm_CANCEL.json");
+
     let server = tokio::spawn(async move {
         let (mut reader, mut write_half) = accept_and_auth(&listener).await;
 
@@ -819,6 +858,7 @@ async fn test_ocm_handler_emits_cancel_event() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let event = tokio::time::timeout(Duration::from_secs(5), rx.recv())
@@ -843,6 +883,7 @@ async fn test_ocm_handler_handles_mixed_updates() {
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
 
     let ocm_fixture = load_fixture("stream/ocm_MIXED.json");
+
     let server = tokio::spawn(async move {
         let (mut reader, mut write_half) = accept_and_auth(&listener).await;
 
@@ -863,9 +904,11 @@ async fn test_ocm_handler_handles_mixed_updates() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let mut report_count = 0;
+
     for _ in 0..10 {
         match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
             Ok(Some(ExecutionEvent::Report(_))) => {
@@ -893,6 +936,7 @@ async fn test_ocm_handler_handles_full_image() {
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
 
     let ocm_fixture = load_fixture("stream/ocm_FULL_IMAGE.json");
+
     let server = tokio::spawn(async move {
         let (mut reader, mut write_half) = accept_and_auth(&listener).await;
 
@@ -913,9 +957,11 @@ async fn test_ocm_handler_handles_full_image() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let mut found_report = false;
+
     for _ in 0..10 {
         match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
             Ok(Some(ExecutionEvent::Report(_))) => {
@@ -941,6 +987,7 @@ async fn test_ocm_voided_partial_emits_both_fill_and_void() {
     let (mut client, mut rx, mut data_rx, _cache) = create_test_execution_client(addr, stream_port);
 
     let ocm_fixture = load_fixture("stream/ocm_VOIDED_partial.json");
+
     let server = tokio::spawn(async move {
         let (mut reader, mut write_half) = accept_and_auth(&listener).await;
 
@@ -961,11 +1008,13 @@ async fn test_ocm_voided_partial_emits_both_fill_and_void() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
     while data_rx.try_recv().is_ok() {}
 
     // Should receive execution report (fill + status for sm=60)
     let mut found_report = false;
+
     for _ in 0..10 {
         match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
             Ok(Some(ExecutionEvent::Report(_))) => {
@@ -1004,6 +1053,7 @@ async fn test_ocm_no_void_event_when_sv_zero() {
     let (mut client, mut rx, mut data_rx, _cache) = create_test_execution_client(addr, stream_port);
 
     let ocm_fixture = load_fixture("stream/ocm_FILLED_sv_zero.json");
+
     let server = tokio::spawn(async move {
         let (mut reader, mut write_half) = accept_and_auth(&listener).await;
 
@@ -1024,11 +1074,13 @@ async fn test_ocm_no_void_event_when_sv_zero() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
     while data_rx.try_recv().is_ok() {}
 
     // Should receive execution report for the fill
     let mut found_report = false;
+
     for _ in 0..10 {
         match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
             Ok(Some(ExecutionEvent::Report(_))) => {
@@ -1067,6 +1119,7 @@ async fn test_submit_order_registers_customer_order_ref() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let order = make_test_order("1.181005744-86362-0.BETFAIR", "O-RFO-001", "2.58", "10");
@@ -1085,7 +1138,7 @@ async fn test_submit_order_registers_customer_order_ref() {
         .lock()
         .unwrap()
         .iter()
-        .any(|m| m == "SportsAPING/v1.0/placeOrders");
+        .any(|m| m == METHOD_PLACE_ORDERS);
     assert!(has_place_orders, "Expected placeOrders call");
 
     client.disconnect().await.unwrap();
@@ -1100,6 +1153,7 @@ async fn test_ocm_filled_no_avp_uses_order_price() {
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
 
     let ocm_fixture = load_fixture("stream/ocm_FILLED_no_avp.json");
+
     let server = tokio::spawn(async move {
         let (mut reader, mut write_half) = accept_and_auth(&listener).await;
 
@@ -1120,10 +1174,12 @@ async fn test_ocm_filled_no_avp_uses_order_price() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     // Expect execution report (fill and/or status report)
     let mut found_report = false;
+
     for _ in 0..10 {
         match tokio::time::timeout(Duration::from_secs(3), rx.recv()).await {
             Ok(Some(ExecutionEvent::Report(_))) => {
@@ -1152,10 +1208,11 @@ async fn test_generate_order_status_reports() {
     // Override listCurrentOrders to return executable orders
     let fixture = load_fixture("rest/list_current_orders_executable.json");
     let v: Value = serde_json::from_str(&fixture).unwrap();
-    state.betting_overrides.lock().unwrap().insert(
-        "SportsAPING/v1.0/listCurrentOrders".to_string(),
-        v["result"].clone(),
-    );
+    state
+        .betting_overrides
+        .lock()
+        .unwrap()
+        .insert(METHOD_LIST_CURRENT_ORDERS.to_string(), v["result"].clone());
 
     let (stream_port, listener) = start_mock_stream().await;
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
@@ -1167,6 +1224,7 @@ async fn test_generate_order_status_reports() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let cmd = GenerateOrderStatusReportsBuilder::default()
@@ -1199,10 +1257,11 @@ async fn test_generate_fill_reports() {
     // Override listCurrentOrders to return executed orders with fills
     let fixture = load_fixture("rest/list_current_orders_execution_complete.json");
     let v: Value = serde_json::from_str(&fixture).unwrap();
-    state.betting_overrides.lock().unwrap().insert(
-        "SportsAPING/v1.0/listCurrentOrders".to_string(),
-        v["result"].clone(),
-    );
+    state
+        .betting_overrides
+        .lock()
+        .unwrap()
+        .insert(METHOD_LIST_CURRENT_ORDERS.to_string(), v["result"].clone());
 
     let (stream_port, listener) = start_mock_stream().await;
     let (mut client, mut rx, _data_rx, _cache) = create_test_execution_client(addr, stream_port);
@@ -1214,6 +1273,7 @@ async fn test_generate_fill_reports() {
     });
 
     client.connect().await.unwrap();
+
     while rx.try_recv().is_ok() {}
 
     let cmd = GenerateFillReportsBuilder::default()

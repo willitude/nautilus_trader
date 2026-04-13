@@ -25,6 +25,7 @@ use std::{
     },
 };
 
+use ahash::AHashMap;
 use chrono::{DateTime, Utc};
 use nautilus_core::{
     AtomicMap, AtomicTime, UUID4, consts::NAUTILUS_USER_AGENT, nanos::UnixNanos,
@@ -32,7 +33,10 @@ use nautilus_core::{
 };
 use nautilus_model::{
     data::{Bar, BarType, BookOrder, FundingRateUpdate, TradeTick},
-    enums::{AccountType, BookType, CurrencyType, OrderSide, OrderType, TimeInForce},
+    enums::{
+        AccountType, BookType, CurrencyType, MarketStatusAction, OrderSide, OrderType, TimeInForce,
+        TriggerType,
+    },
     events::AccountState,
     identifiers::{AccountId, ClientOrderId, InstrumentId, Symbol, VenueOrderId},
     instruments::{Instrument, InstrumentAny},
@@ -57,7 +61,7 @@ use crate::{
         credential::KrakenCredential,
         enums::{
             KrakenApiResult, KrakenEnvironment, KrakenFuturesOrderType, KrakenOrderSide,
-            KrakenProductType, KrakenSendStatus,
+            KrakenProductType, KrakenSendStatus, KrakenTriggerSignal,
         },
         parse::{
             bar_type_to_futures_resolution, parse_bar, parse_futures_fill_report,
@@ -123,7 +127,7 @@ impl Debug for KrakenFuturesRawHttpClient {
 
 impl KrakenFuturesRawHttpClient {
     /// Creates a new [`KrakenFuturesRawHttpClient`].
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         environment: KrakenEnvironment,
         base_url_override: Option<String>,
@@ -170,7 +174,7 @@ impl KrakenFuturesRawHttpClient {
     }
 
     /// Creates a new [`KrakenFuturesRawHttpClient`] with credentials.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn with_credentials(
         api_key: String,
         api_secret: String,
@@ -1015,7 +1019,7 @@ impl Debug for KrakenFuturesHttpClient {
 
 impl KrakenFuturesHttpClient {
     /// Creates a new [`KrakenFuturesHttpClient`].
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         environment: KrakenEnvironment,
         base_url_override: Option<String>,
@@ -1044,7 +1048,7 @@ impl KrakenFuturesHttpClient {
     }
 
     /// Creates a new [`KrakenFuturesHttpClient`] with credentials.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn with_credentials(
         api_key: String,
         api_secret: String,
@@ -1082,7 +1086,7 @@ impl KrakenFuturesHttpClient {
     /// or `KRAKEN_FUTURES_DEMO_API_KEY` and `KRAKEN_FUTURES_DEMO_API_SECRET` (demo).
     ///
     /// Falls back to unauthenticated client if credentials are not set.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn from_env(
         environment: KrakenEnvironment,
         base_url_override: Option<String>,
@@ -1188,6 +1192,29 @@ impl KrakenFuturesHttpClient {
             .collect();
 
         Ok(instruments)
+    }
+
+    /// Requests the current market status for Kraken Futures instruments.
+    pub async fn request_instrument_statuses(
+        &self,
+    ) -> anyhow::Result<AHashMap<InstrumentId, MarketStatusAction>, KrakenHttpError> {
+        let response = self.inner.get_instruments().await?;
+
+        Ok(response
+            .instruments
+            .iter()
+            .map(|instrument| {
+                let instrument_id =
+                    InstrumentId::new(Symbol::new(&instrument.symbol), *KRAKEN_VENUE);
+                let action = if instrument.tradeable {
+                    MarketStatusAction::Trading
+                } else {
+                    MarketStatusAction::NotAvailableForTrading
+                };
+
+                (instrument_id, action)
+            })
+            .collect())
     }
 
     /// Requests the mark price for an instrument.
@@ -1335,6 +1362,7 @@ impl KrakenFuturesHttpClient {
             .await?;
 
         let mut bars = Vec::new();
+
         for candle in response.candles {
             let ohlc = OhlcData {
                 time: candle.time / 1000,
@@ -1624,6 +1652,7 @@ impl KrakenFuturesHttpClient {
                 if let Some(instrument) = self.get_instrument_by_raw_symbol(&event.symbol) {
                     match parse_futures_order_event_status_report(
                         event,
+                        Some(event_wrapper.event_type),
                         &instrument,
                         account_id,
                         ts_init,
@@ -1749,7 +1778,7 @@ impl KrakenFuturesHttpClient {
         Ok(all_reports)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn build_send_order_params(
         &self,
         instrument_id: InstrumentId,
@@ -1760,6 +1789,7 @@ impl KrakenFuturesHttpClient {
         time_in_force: TimeInForce,
         price: Option<Price>,
         trigger_price: Option<Price>,
+        trigger_type: Option<TriggerType>,
         reduce_only: bool,
         post_only: bool,
     ) -> anyhow::Result<KrakenFuturesSendOrderParams> {
@@ -1813,6 +1843,17 @@ impl KrakenFuturesHttpClient {
             .size(quantity.to_string())
             .order_type(kraken_order_type);
 
+        if matches!(
+            order_type,
+            OrderType::StopMarket
+                | OrderType::StopLimit
+                | OrderType::MarketIfTouched
+                | OrderType::LimitIfTouched
+        ) && let Some(signal) = map_futures_trigger_signal(trigger_type)?
+        {
+            builder.trigger_signal(signal);
+        }
+
         match order_type {
             OrderType::StopMarket => {
                 if let Some(trigger) = trigger_price {
@@ -1863,7 +1904,7 @@ impl KrakenFuturesHttpClient {
     /// - The order type or time in force is not supported.
     /// - The request fails.
     /// - The order is rejected.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub async fn submit_order(
         &self,
         account_id: AccountId,
@@ -1875,6 +1916,7 @@ impl KrakenFuturesHttpClient {
         time_in_force: TimeInForce,
         price: Option<Price>,
         trigger_price: Option<Price>,
+        trigger_type: Option<TriggerType>,
         reduce_only: bool,
         post_only: bool,
     ) -> anyhow::Result<OrderStatusReport> {
@@ -1891,6 +1933,7 @@ impl KrakenFuturesHttpClient {
             time_in_force,
             price,
             trigger_price,
+            trigger_type,
             reduce_only,
             post_only,
         )?;
@@ -1993,6 +2036,7 @@ impl KrakenFuturesHttpClient {
             };
             return parse_futures_order_event_status_report(
                 &event,
+                Some(send_event.event_type),
                 &instrument,
                 account_id,
                 ts_init,
@@ -2011,6 +2055,7 @@ impl KrakenFuturesHttpClient {
 
         parse_futures_order_event_status_report(
             &event_wrapper.order,
+            Some(event_wrapper.event_type),
             &instrument,
             account_id,
             ts_init,
@@ -2037,42 +2082,15 @@ impl KrakenFuturesHttpClient {
         price: Option<Price>,
         trigger_price: Option<Price>,
     ) -> anyhow::Result<VenueOrderId> {
-        let _ = self
-            .get_cached_instrument(&instrument_id.symbol.inner())
-            .ok_or_else(|| anyhow::anyhow!("Instrument not found in cache: {instrument_id}"))?;
-
-        let order_id = venue_order_id.as_ref().map(|id| id.to_string());
-        let cli_ord_id = client_order_id.as_ref().map(truncate_cl_ord_id);
-
-        if order_id.is_none() && cli_ord_id.is_none() {
-            anyhow::bail!("Either client_order_id or venue_order_id must be provided");
-        }
-
-        let mut builder = KrakenFuturesEditOrderParamsBuilder::default();
-
-        if let Some(ref id) = order_id {
-            builder.order_id(id.clone());
-        }
-
-        if let Some(ref id) = cli_ord_id {
-            builder.cli_ord_id(id.clone());
-        }
-
-        if let Some(qty) = quantity {
-            builder.size(qty.to_string());
-        }
-
-        if let Some(p) = price {
-            builder.limit_price(p.to_string());
-        }
-
-        if let Some(tp) = trigger_price {
-            builder.stop_price(tp.to_string());
-        }
-
-        let params = builder
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to build edit order params: {e}"))?;
+        let params = self.build_edit_order_params(
+            instrument_id,
+            client_order_id,
+            venue_order_id,
+            quantity,
+            price,
+            trigger_price,
+        )?;
+        let original_order_id = params.order_id.clone();
 
         let response = self.inner.edit_order(&params).await?;
 
@@ -2085,7 +2103,7 @@ impl KrakenFuturesHttpClient {
         let new_venue_order_id = response
             .edit_status
             .order_id
-            .or(order_id)
+            .or(original_order_id)
             .ok_or_else(|| anyhow::anyhow!("No order ID in edit order response"))?;
 
         Ok(VenueOrderId::new(&new_venue_order_id))
@@ -2181,7 +2199,7 @@ impl KrakenFuturesHttpClient {
     /// # Errors
     ///
     /// Returns an error if the batch request fails at the API level.
-    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    #[expect(clippy::type_complexity)]
     pub async fn submit_orders_batch(
         &self,
         orders: Vec<(
@@ -2193,6 +2211,7 @@ impl KrakenFuturesHttpClient {
             TimeInForce,
             Option<Price>,
             Option<Price>,
+            Option<TriggerType>,
             bool,
             bool,
         )>,
@@ -2219,6 +2238,7 @@ impl KrakenFuturesHttpClient {
                 time_in_force,
                 price,
                 trigger_price,
+                trigger_type,
                 reduce_only,
                 post_only,
             ),
@@ -2233,6 +2253,7 @@ impl KrakenFuturesHttpClient {
                 time_in_force,
                 price,
                 trigger_price,
+                trigger_type,
                 reduce_only,
                 post_only,
             ) {
@@ -2271,6 +2292,7 @@ impl KrakenFuturesHttpClient {
                             .batch_status
                             .first()
                             .map_or("Unknown error", |s| s.status.as_str());
+
                         for _ in 0..chunk.len() {
                             batch_statuses.push(FuturesSendStatus {
                                 order_id: None,
@@ -2307,6 +2329,156 @@ impl KrakenFuturesHttpClient {
         }
 
         Ok(all_statuses.into_iter().flatten().collect())
+    }
+
+    /// Modifies multiple orders in a single batch request.
+    #[expect(clippy::type_complexity)]
+    pub async fn edit_orders_batch(
+        &self,
+        orders: Vec<(
+            InstrumentId,
+            Option<ClientOrderId>,
+            Option<VenueOrderId>,
+            Option<Quantity>,
+            Option<Price>,
+            Option<Price>,
+        )>,
+    ) -> anyhow::Result<Vec<String>> {
+        let count = orders.len();
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut all_statuses: Vec<Option<String>> = vec![None; count];
+        let mut valid_items = Vec::with_capacity(count);
+        let mut valid_indices = Vec::with_capacity(count);
+
+        for (
+            idx,
+            (instrument_id, client_order_id, venue_order_id, quantity, price, trigger_price),
+        ) in orders.into_iter().enumerate()
+        {
+            match self.build_edit_order_params(
+                instrument_id,
+                client_order_id,
+                venue_order_id,
+                quantity,
+                price,
+                trigger_price,
+            ) {
+                Ok(params) => {
+                    valid_items.push(KrakenFuturesBatchEditItem::from_params(
+                        params,
+                        idx.to_string(),
+                    ));
+                    valid_indices.push(idx);
+                }
+                Err(e) => {
+                    all_statuses[idx] = Some(format!("validation_error: {e}"));
+                }
+            }
+        }
+
+        if valid_items.is_empty() {
+            return Ok(all_statuses.into_iter().flatten().collect());
+        }
+
+        let mut batch_statuses: Vec<String> = Vec::with_capacity(valid_items.len());
+
+        for chunk in valid_items.chunks(BATCH_ORDER_LIMIT) {
+            match self.inner.edit_orders_batch(chunk.to_vec()).await {
+                Ok(response) => {
+                    if response.result == KrakenApiResult::Success {
+                        batch_statuses.extend(response.batch_status.into_iter().map(|s| s.status));
+                    } else {
+                        let error_msg = response
+                            .batch_status
+                            .first()
+                            .map_or("Unknown error", |s| s.status.as_str());
+
+                        for _ in 0..chunk.len() {
+                            batch_statuses.push(format!("api_error: {error_msg}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let remaining = valid_items.len() - batch_statuses.len();
+                    for _ in 0..remaining {
+                        batch_statuses.push(format!("batch_error: {e}"));
+                    }
+                    break;
+                }
+            }
+        }
+
+        for (batch_idx, &original_idx) in valid_indices.iter().enumerate() {
+            if let Some(status) = batch_statuses.get(batch_idx) {
+                all_statuses[original_idx] = Some(status.clone());
+            }
+        }
+
+        Ok(all_statuses.into_iter().flatten().collect())
+    }
+
+    fn build_edit_order_params(
+        &self,
+        instrument_id: InstrumentId,
+        client_order_id: Option<ClientOrderId>,
+        venue_order_id: Option<VenueOrderId>,
+        quantity: Option<Quantity>,
+        price: Option<Price>,
+        trigger_price: Option<Price>,
+    ) -> anyhow::Result<KrakenFuturesEditOrderParams> {
+        let _ = self
+            .get_cached_instrument(&instrument_id.symbol.inner())
+            .ok_or_else(|| anyhow::anyhow!("Instrument not found in cache: {instrument_id}"))?;
+
+        let order_id = venue_order_id.as_ref().map(|id| id.to_string());
+        let cli_ord_id = client_order_id.as_ref().map(truncate_cl_ord_id);
+
+        if order_id.is_none() && cli_ord_id.is_none() {
+            anyhow::bail!("Either client_order_id or venue_order_id must be provided");
+        }
+
+        let mut builder = KrakenFuturesEditOrderParamsBuilder::default();
+
+        if let Some(ref id) = order_id {
+            builder.order_id(id.clone());
+        }
+
+        if let Some(ref id) = cli_ord_id {
+            builder.cli_ord_id(id.clone());
+        }
+
+        if let Some(qty) = quantity {
+            builder.size(qty.to_string());
+        }
+
+        if let Some(p) = price {
+            builder.limit_price(p.to_string());
+        }
+
+        if let Some(tp) = trigger_price {
+            builder.stop_price(tp.to_string());
+        }
+
+        builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build edit order params: {e}"))
+    }
+}
+
+fn map_futures_trigger_signal(
+    trigger_type: Option<TriggerType>,
+) -> anyhow::Result<Option<KrakenTriggerSignal>> {
+    match trigger_type {
+        None => Ok(None),
+        Some(TriggerType::Default | TriggerType::LastPrice) => Ok(Some(KrakenTriggerSignal::Last)),
+        Some(TriggerType::MarkPrice) => Ok(Some(KrakenTriggerSignal::Mark)),
+        Some(TriggerType::IndexPrice) => Ok(Some(KrakenTriggerSignal::Index)),
+        Some(other) => anyhow::bail!(
+            "Unsupported trigger type for Kraken Futures: {other:?} (only LastPrice, MarkPrice, and IndexPrice supported)"
+        ),
     }
 }
 
@@ -2449,6 +2621,7 @@ fn parse_cash_account_balances(account: &FuturesAccount, balances: &mut Vec<Acco
 #[cfg(test)]
 mod tests {
     use ahash::AHashMap;
+    use nautilus_model::instruments::CryptoPerpetual;
     use rstest::rstest;
 
     use super::*;
@@ -2657,5 +2830,99 @@ mod tests {
         let balance = &balances[0];
         assert_eq!(balance.total.as_f64(), 10.0);
         assert_eq!(balance.locked.as_f64(), 0.0);
+    }
+
+    #[rstest]
+    #[case(None, None)]
+    #[case(Some(TriggerType::Default), Some(KrakenTriggerSignal::Last))]
+    #[case(Some(TriggerType::LastPrice), Some(KrakenTriggerSignal::Last))]
+    #[case(Some(TriggerType::MarkPrice), Some(KrakenTriggerSignal::Mark))]
+    #[case(Some(TriggerType::IndexPrice), Some(KrakenTriggerSignal::Index))]
+    fn test_build_send_order_params_maps_supported_trigger_signals(
+        #[case] trigger_type: Option<TriggerType>,
+        #[case] expected_signal: Option<KrakenTriggerSignal>,
+    ) {
+        let client = KrakenFuturesHttpClient::default();
+        let instrument_id = cache_test_futures_instrument(&client);
+
+        let params = client
+            .build_send_order_params(
+                instrument_id,
+                ClientOrderId::new("futures-trigger"),
+                OrderSide::Buy,
+                OrderType::StopMarket,
+                Quantity::from("1"),
+                TimeInForce::Gtc,
+                None,
+                Some(Price::from("45000")),
+                trigger_type,
+                false,
+                false,
+            )
+            .unwrap();
+
+        assert_eq!(params.trigger_signal, expected_signal);
+    }
+
+    #[rstest]
+    fn test_build_send_order_params_rejects_unsupported_trigger_signal() {
+        let client = KrakenFuturesHttpClient::default();
+        let instrument_id = cache_test_futures_instrument(&client);
+
+        let error = client
+            .build_send_order_params(
+                instrument_id,
+                ClientOrderId::new("futures-trigger-invalid"),
+                OrderSide::Buy,
+                OrderType::StopMarket,
+                Quantity::from("1"),
+                TimeInForce::Gtc,
+                None,
+                Some(Price::from("45000")),
+                Some(TriggerType::BidAsk),
+                false,
+                false,
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Unsupported trigger type for Kraken Futures")
+        );
+    }
+
+    fn cache_test_futures_instrument(client: &KrakenFuturesHttpClient) -> InstrumentId {
+        let instrument_id = InstrumentId::from("PF_XBTUSD.KRAKEN");
+
+        client.cache_instrument(InstrumentAny::CryptoPerpetual(CryptoPerpetual::new(
+            instrument_id,
+            Symbol::new("PF_XBTUSD"),
+            Currency::BTC(),
+            Currency::USD(),
+            Currency::USD(),
+            false,
+            0,
+            4,
+            Price::from("1"),
+            Quantity::from("0.0001"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            0.into(),
+            0.into(),
+        )));
+
+        instrument_id
     }
 }

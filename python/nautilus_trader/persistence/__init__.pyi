@@ -13,9 +13,9 @@ __all__ = [
     "NautilusDataType",
     "OrderBookDeltaDataWrangler",
     "OrderBookDepth10DataWrangler",
-    "ParquetDataCatalogV2",
+    "ParquetDataCatalog",
     "QuoteTickDataWrangler",
-    "StreamingFeatherWriterV2",
+    "StreamingFeatherWriter",
     "TradeTickDataWrangler",
 ]
 
@@ -41,11 +41,7 @@ class DataBackendSession:
         sql_query: str | None = None,
     ) -> None: ...
     def add_custom_file(
-        self,
-        type_name: str,
-        table_name: str,
-        file_path: str,
-        sql_query: str | None = ...,
+        self, type_name: str, table_name: str, file_path: str, sql_query: str | None = None
     ) -> None: ...
     def to_query_result(self) -> DataQueryResult: ...
     def register_object_store_from_uri(
@@ -80,7 +76,7 @@ class OrderBookDepth10DataWrangler:
     def process_record_batch_bytes(self, data: bytes) -> list[model.OrderBookDepth10]: ...
 
 @typing.final
-class ParquetDataCatalogV2:
+class ParquetDataCatalog:
     def new(
         self,
         base_path: str,
@@ -88,7 +84,7 @@ class ParquetDataCatalogV2:
         batch_size: int | None = None,
         compression: int | None = None,
         max_row_group_size: int | None = None,
-    ) -> ParquetDataCatalogV2: ...
+    ) -> ParquetDataCatalog: ...
     def write_quote_ticks(
         self,
         data: typing.Sequence[model.QuoteTick],
@@ -301,18 +297,7 @@ class ParquetDataCatalogV2:
     ) -> list[typing.Any]: ...
 
 @typing.final
-class QuoteTickDataWrangler:
-    def __init__(self, instrument_id: str, price_precision: int, size_precision: int) -> None: ...
-    @property
-    def instrument_id(self) -> str: ...
-    @property
-    def price_precision(self) -> int: ...
-    @property
-    def size_precision(self) -> int: ...
-    def process_record_batch_bytes(self, data: bytes) -> list[model.QuoteTick]: ...
-
-@typing.final
-class StreamingFeatherWriterV2:
+class StreamingFeatherWriter:
     def new(
         self,
         path: str,
@@ -328,7 +313,7 @@ class StreamingFeatherWriterV2:
         rotation_timezone: str = "UTC",
         flush_interval_ms: int | None = None,
         replace: bool = False,
-    ) -> StreamingFeatherWriterV2: ...
+    ) -> StreamingFeatherWriter: ...
     def subscribe(self) -> None: ...
     def unsubscribe(self) -> None: ...
     def write(self, data: typing.Any) -> None: ...
@@ -340,6 +325,17 @@ class StreamingFeatherWriterV2:
     def get_next_rotation_time(
         self, type_str: str, instrument_id: str | None = None
     ) -> int | None: ...
+
+@typing.final
+class QuoteTickDataWrangler:
+    def __init__(self, instrument_id: str, price_precision: int, size_precision: int) -> None: ...
+    @property
+    def instrument_id(self) -> str: ...
+    @property
+    def price_precision(self) -> int: ...
+    @property
+    def size_precision(self) -> int: ...
+    def process_record_batch_bytes(self, data: bytes) -> list[model.QuoteTick]: ...
 
 @typing.final
 class TradeTickDataWrangler:

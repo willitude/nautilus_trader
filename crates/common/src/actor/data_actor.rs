@@ -3125,7 +3125,7 @@ impl DataActorCore {
     }
 
     /// Helper method for registering book deltas subscriptions from the trait.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn subscribe_book_deltas(
         &mut self,
         topic: MStr<Topic>,
@@ -3158,7 +3158,7 @@ impl DataActorCore {
     }
 
     /// Helper method for registering book snapshots subscriptions from the trait.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn subscribe_book_at_interval(
         &mut self,
         topic: MStr<Topic>,
@@ -3399,7 +3399,6 @@ impl DataActorCore {
     }
 
     /// Helper method for subscribing to option chain snapshots from the trait.
-    #[allow(clippy::too_many_arguments)]
     pub fn subscribe_option_chain(
         &mut self,
         topic: MStr<Topic>,
@@ -3564,6 +3563,7 @@ impl DataActorCore {
 
         let command = UnsubscribeCommand::BookSnapshots(UnsubscribeBookSnapshots {
             instrument_id,
+            interval_ms,
             client_id,
             venue: Some(instrument_id.venue),
             command_id: UUID4::new(),
@@ -3843,7 +3843,7 @@ impl DataActorCore {
     /// # Errors
     ///
     /// Returns an error if input parameters are invalid.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn request_data(
         &self,
         data_type: DataType,
@@ -3997,7 +3997,7 @@ impl DataActorCore {
     /// # Errors
     ///
     /// Returns an error if input parameters are invalid.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn request_quotes(
         &self,
         instrument_id: InstrumentId,
@@ -4039,7 +4039,7 @@ impl DataActorCore {
     /// # Errors
     ///
     /// Returns an error if input parameters are invalid.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn request_trades(
         &self,
         instrument_id: InstrumentId,
@@ -4081,7 +4081,7 @@ impl DataActorCore {
     /// # Errors
     ///
     /// Returns an error if input parameters are invalid.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn request_funding_rates(
         &self,
         instrument_id: InstrumentId,
@@ -4123,7 +4123,7 @@ impl DataActorCore {
     /// # Errors
     ///
     /// Returns an error if input parameters are invalid.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn request_bars(
         &self,
         bar_type: BarType,

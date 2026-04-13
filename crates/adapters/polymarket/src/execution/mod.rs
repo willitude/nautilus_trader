@@ -48,7 +48,10 @@ use nautilus_core::{
 use nautilus_live::{ExecutionClientCore, ExecutionEventEmitter};
 use nautilus_model::{
     accounts::AccountAny,
-    enums::{AccountType, CurrencyType, OmsType, OrderSide, OrderStatus, OrderType, TimeInForce},
+    enums::{
+        AccountType, CurrencyType, LiquiditySide, OmsType, OrderSide, OrderStatus, OrderType,
+        TimeInForce,
+    },
     events::{OrderEventAny, OrderUpdated},
     identifiers::{
         AccountId, ClientId, ClientOrderId, InstrumentId, StrategyId, Venue, VenueOrderId,
@@ -56,7 +59,7 @@ use nautilus_model::{
     instruments::{Instrument, InstrumentAny},
     orders::{Order, OrderAny},
     reports::{ExecutionMassStatus, FillReport, OrderStatusReport, PositionStatusReport},
-    types::{AccountBalance, Currency, MarginBalance, Price, Quantity},
+    types::{AccountBalance, Currency, MarginBalance, Money, Price, Quantity},
 };
 use nautilus_network::retry::RetryConfig;
 use tokio::task::JoinHandle;
@@ -65,7 +68,10 @@ use ustr::Ustr;
 use self::{
     order_builder::PolymarketOrderBuilder,
     order_fill_tracker::OrderFillTrackerMap,
-    parse::{parse_balance_allowance, parse_order_status_report},
+    parse::{
+        compute_commission, instrument_taker_fee, parse_balance_allowance,
+        parse_order_status_report,
+    },
     reconciliation::{
         FillContext, apply_fill_filters, build_fill_reports_from_trades, build_position_reports,
     },
@@ -120,7 +126,6 @@ impl PolymarketExecutionClient {
     /// # Errors
     ///
     /// Returns an error if credentials cannot be resolved or clients fail to construct.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         core: ExecutionClientCore,
         config: PolymarketExecClientConfig,
@@ -327,6 +332,7 @@ impl PolymarketExecutionClient {
                         {
                             let http = http_client.clone();
                             let emit = emitter.clone();
+
                             get_runtime().spawn(async move {
                                 match fetch_and_emit_account_state(
                                     &http, &emit, clock, signature_type,
@@ -622,6 +628,7 @@ impl PolymarketExecutionClient {
             .cache()
             .instrument(&order.instrument_id())
             .cloned();
+
         match instrument {
             Some(i) => Some(i),
             None => {
@@ -718,15 +725,7 @@ impl ExecutionClient for PolymarketExecutionClient {
         }
 
         self.abort_pending_tasks();
-
-        if self.core.is_connected() {
-            let runtime = get_runtime();
-            runtime.block_on(async {
-                if let Err(e) = self.ws_client.disconnect().await {
-                    log::warn!("Error disconnecting WebSocket client: {e}");
-                }
-            });
-        }
+        self.ws_client.abort();
 
         self.core.set_disconnected();
         self.core.set_stopped();
@@ -952,6 +951,7 @@ impl ExecutionClient for PolymarketExecutionClient {
         }
 
         let mut venue_to_order: Vec<(String, OrderAny)> = Vec::new();
+
         for c in &cmd.cancels {
             if let Some(order) = self.core.cache().order(&c.client_order_id)
                 && let Some(vid) = order.venue_order_id()
@@ -990,11 +990,13 @@ impl ExecutionClient for PolymarketExecutionClient {
     }
 
     fn query_account(&self, _cmd: &QueryAccount) -> anyhow::Result<()> {
-        let runtime = get_runtime();
-        runtime.block_on(async {
-            if let Err(e) = self.refresh_account_state().await {
-                log::warn!("Failed to query account state: {e}");
-            }
+        let http_client = self.http_client.clone();
+        let emitter = self.emitter.clone();
+        let clock = self.clock;
+        let signature_type = self.config.signature_type;
+
+        self.spawn_task("query_account", async move {
+            fetch_and_emit_account_state(&http_client, &emitter, clock, signature_type).await
         });
         Ok(())
     }
@@ -1020,12 +1022,11 @@ impl ExecutionClient for PolymarketExecutionClient {
             None => (4, 6),
         };
 
-        let runtime = get_runtime();
-        let http_client = &self.http_client;
-        let emitter = &self.emitter;
+        let http_client = self.http_client.clone();
+        let emitter = self.emitter.clone();
         let clock = self.clock;
 
-        runtime.block_on(async {
+        self.spawn_task("query_order", async move {
             match http_client.get_order_optional(&venue_order_id).await {
                 Ok(Some(order)) => {
                     let report = parse_order_status_report(
@@ -1046,6 +1047,7 @@ impl ExecutionClient for PolymarketExecutionClient {
                     log::warn!("Failed to query order {venue_order_id}: {e}");
                 }
             }
+            Ok(())
         });
 
         Ok(())
@@ -1072,6 +1074,24 @@ impl ExecutionClient for PolymarketExecutionClient {
             self.neg_risk_index.insert(bo.id, neg_risk);
         }
         self.shared_token_instruments.insert(token_id, instrument);
+    }
+
+    fn calculate_commission(
+        &self,
+        instrument: &InstrumentAny,
+        last_qty: Quantity,
+        last_px: Price,
+        liquidity_side: LiquiditySide,
+    ) -> Option<Money> {
+        let fee_rate = instrument_taker_fee(instrument);
+        let commission = compute_commission(
+            fee_rate,
+            last_qty.as_decimal(),
+            last_px.as_decimal(),
+            liquidity_side,
+        );
+
+        Some(Money::new(commission, instrument.quote_currency()))
     }
 
     async fn connect(&mut self) -> anyhow::Result<()> {
@@ -1300,7 +1320,7 @@ fn process_cancel_result(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_order_response(
     result: crate::http::error::Result<OrderResponse>,
     order: &OrderAny,
@@ -1359,6 +1379,7 @@ fn handle_order_response(
                         .remove(&venue_order_id)
                     {
                         let mut has_filled = false;
+
                         for report in &buffered {
                             if report.order_status == OrderStatus::Filled {
                                 has_filled = true;
@@ -1482,7 +1503,7 @@ async fn execute_deferred_cancel(
 /// If the order has reached a terminal state that the WS stream missed
 /// (e.g. UNMATCHED for an unfilled FOK), emits an order status report
 /// so the engine can reconcile it.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 async fn check_fok_status(
     submitter: &OrderSubmitter,
     order_id: &str,

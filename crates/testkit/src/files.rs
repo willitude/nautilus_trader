@@ -25,6 +25,7 @@ use std::{
 };
 
 use aws_lc_rs::digest::{self, Context};
+use nautilus_core::hex;
 use nautilus_network::retry::RetryConfig;
 use rand::{RngExt, rng};
 use reqwest::blocking::Client;
@@ -862,7 +863,7 @@ mod tests {
     }
 
     #[rstest]
-    #[allow(clippy::panic_in_result_fn)]
+    #[expect(clippy::panic_in_result_fn)]
     fn test_calculate_sha256() -> anyhow::Result<()> {
         let temp_dir = TempDir::new()?;
         let test_file_path = temp_dir.path().join("test_file.txt");
@@ -878,7 +879,7 @@ mod tests {
     }
 
     #[rstest]
-    #[allow(clippy::panic_in_result_fn)]
+    #[expect(clippy::panic_in_result_fn)]
     fn test_verify_sha256_checksum() -> anyhow::Result<()> {
         let temp_dir = TempDir::new()?;
         let test_file_path = temp_dir.path().join("test_file.txt");

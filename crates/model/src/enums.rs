@@ -711,6 +711,7 @@ impl InstrumentClass {
     }
 
     /// Returns whether this instrument class allows negative prices.
+    #[must_use]
     pub const fn allows_negative_price(&self) -> bool {
         matches!(
             self,
@@ -805,7 +806,6 @@ impl FromU8 for InstrumentCloseType {
     feature = "python",
     pyo3_stub_gen::derive::gen_stub_pyclass_enum(module = "nautilus_trader.model")
 )]
-#[allow(clippy::enum_variant_names)]
 pub enum LiquiditySide {
     /// No liquidity side specified.
     NoLiquiditySide = 0,
@@ -1109,7 +1109,6 @@ pub enum OtoTriggerMode {
 )]
 #[strum(ascii_case_insensitive)]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
-#[allow(clippy::enum_variant_names)]
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(
@@ -1146,7 +1145,7 @@ impl OrderSide {
         match &self {
             Self::Buy => OrderSideSpecified::Buy,
             Self::Sell => OrderSideSpecified::Sell,
-            _ => panic!("Order invariant failed: side must be `Buy` or `Sell`"),
+            Self::NoOrderSide => panic!("Order invariant failed: side must be `Buy` or `Sell`"),
         }
     }
 }
@@ -1182,7 +1181,6 @@ impl FromU8 for OrderSide {
 )]
 #[strum(ascii_case_insensitive)]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
-#[allow(clippy::enum_variant_names)]
 pub enum OrderSideSpecified {
     /// The order is a BUY.
     Buy = 1,
@@ -1481,7 +1479,6 @@ impl FromU8 for PositionAdjustmentType {
 )]
 #[strum(ascii_case_insensitive)]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
-#[allow(clippy::enum_variant_names)]
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(
@@ -1521,7 +1518,9 @@ impl PositionSide {
             Self::Long => PositionSideSpecified::Long,
             Self::Short => PositionSideSpecified::Short,
             Self::Flat => PositionSideSpecified::Flat,
-            _ => panic!("Position invariant failed: side must be `Long`, `Short`, or `Flat`"),
+            Self::NoPositionSide => {
+                panic!("Position invariant failed: side must be `Long`, `Short`, or `Flat`")
+            }
         }
     }
 }
@@ -1545,7 +1544,6 @@ impl PositionSide {
 )]
 #[strum(ascii_case_insensitive)]
 #[strum(serialize_all = "SCREAMING_SNAKE_CASE")]
-#[allow(clippy::enum_variant_names)]
 #[cfg_attr(
     feature = "python",
     pyo3::pyclass(

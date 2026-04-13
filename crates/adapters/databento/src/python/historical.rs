@@ -82,6 +82,7 @@ impl DatabentoHistoricalClient {
         Ok(Self { inner })
     }
 
+    /// Returns the API key from the stored credential.
     #[getter]
     #[pyo3(name = "api_key")]
     fn py_api_key(&self) -> &str {
@@ -114,7 +115,7 @@ impl DatabentoHistoricalClient {
     /// Fetches instrument definitions for the given parameters.
     #[pyo3(name = "get_range_instruments")]
     #[pyo3(signature = (dataset, instrument_ids, start, end=None, limit=None))]
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn py_get_range_instruments<'py>(
         &self,
         py: Python<'py>,
@@ -157,7 +158,7 @@ impl DatabentoHistoricalClient {
     /// Fetches quote ticks for the given parameters.
     #[pyo3(name = "get_range_quotes")]
     #[pyo3(signature = (dataset, instrument_ids, start, end=None, limit=None, price_precision=None, schema=None))]
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn py_get_range_quotes<'py>(
         &self,
         py: Python<'py>,
@@ -193,7 +194,7 @@ impl DatabentoHistoricalClient {
     /// Fetches trade ticks for the given parameters.
     #[pyo3(name = "get_range_trades")]
     #[pyo3(signature = (dataset, instrument_ids, start, end=None, limit=None, price_precision=None))]
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn py_get_range_trades<'py>(
         &self,
         py: Python<'py>,
@@ -228,7 +229,7 @@ impl DatabentoHistoricalClient {
     /// Fetches bars for the given parameters.
     #[pyo3(name = "get_range_bars")]
     #[pyo3(signature = (dataset, instrument_ids, aggregation, start, end=None, limit=None, price_precision=None, timestamp_on_close=true))]
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn py_get_range_bars<'py>(
         &self,
         py: Python<'py>,
@@ -264,7 +265,7 @@ impl DatabentoHistoricalClient {
 
     #[pyo3(name = "get_order_book_depth10")]
     #[pyo3(signature = (dataset, instrument_ids, start, end=None, depth=None))]
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn py_get_order_book_depth10<'py>(
         &self,
         py: Python<'py>,
@@ -298,7 +299,7 @@ impl DatabentoHistoricalClient {
     /// Fetches order book deltas for the given parameters.
     #[pyo3(name = "get_range_order_book_deltas")]
     #[pyo3(signature = (dataset, instrument_ids, start, end=None, limit=None, price_precision=None))]
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn py_get_range_order_book_deltas<'py>(
         &self,
         py: Python<'py>,
@@ -333,7 +334,7 @@ impl DatabentoHistoricalClient {
     /// Fetches imbalance data for the given parameters.
     #[pyo3(name = "get_range_imbalance")]
     #[pyo3(signature = (dataset, instrument_ids, start, end=None, limit=None, price_precision=None))]
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn py_get_range_imbalance<'py>(
         &self,
         py: Python<'py>,
@@ -368,7 +369,7 @@ impl DatabentoHistoricalClient {
     /// Fetches statistics data for the given parameters.
     #[pyo3(name = "get_range_statistics")]
     #[pyo3(signature = (dataset, instrument_ids, start, end=None, limit=None, price_precision=None))]
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
     fn py_get_range_statistics<'py>(
         &self,
         py: Python<'py>,
@@ -403,7 +404,7 @@ impl DatabentoHistoricalClient {
     /// Fetches status data for the given parameters.
     #[pyo3(name = "get_range_status")]
     #[pyo3(signature = (dataset, instrument_ids, start, end=None, limit=None))]
-    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn py_get_range_status<'py>(
         &self,
         py: Python<'py>,

@@ -248,7 +248,6 @@ impl Log for Logger {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 impl Logger {
     /// Initializes the logger based on the `NAUTILUS_LOG` environment variable.
     ///
@@ -299,6 +298,10 @@ impl Logger {
             );
         }
 
+        if config.bypass_logging {
+            super::logging_set_bypass();
+        }
+
         let is_colored = config.is_colored;
 
         let print_config = config.print_config;
@@ -342,7 +345,7 @@ impl Logger {
             .ok_or_else(|| anyhow::anyhow!("Failed to create LogGuard from global sender"))
     }
 
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn handle_messages(
         trader_id: String,
         instance_id: String,
@@ -359,6 +362,9 @@ impl Logger {
             is_colored,
             print_config: _,
             use_tracing: _,
+            bypass_logging: _,
+            file_config: _,
+            clear_log_file: _,
         } = config;
 
         // Pre-sort module filters by descending path length for O(n) longest-prefix lookup
@@ -742,6 +748,7 @@ mod tests {
                 is_colored: true,
                 print_config: false,
                 use_tracing: false,
+                ..Default::default()
             }
         );
     }
@@ -760,6 +767,7 @@ mod tests {
                 is_colored: true,
                 print_config: true,
                 use_tracing: false,
+                ..Default::default()
             }
         );
     }
@@ -782,6 +790,7 @@ mod tests {
                 is_colored: true,
                 print_config: false,
                 use_tracing: false,
+                ..Default::default()
             }
         );
     }

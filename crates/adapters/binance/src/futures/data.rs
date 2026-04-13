@@ -155,9 +155,10 @@ impl BinanceFuturesDataClient {
             config.api_key.clone(),
             config.api_secret.clone(),
             config.base_url_http.clone(),
-            None, // recv_window
-            None, // timeout_secs
-            None, // proxy_url
+            None,  // recv_window
+            None,  // timeout_secs
+            None,  // proxy_url
+            false, // treat_expired_as_canceled
         )?;
 
         let ws_client = BinanceFuturesWebSocketClient::new(
@@ -210,7 +211,7 @@ impl BinanceFuturesDataClient {
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn handle_ws_message(
         msg: BinanceFuturesWsStreamsMessage,
         data_sender: &tokio::sync::mpsc::UnboundedSender<DataEvent>,
@@ -390,7 +391,7 @@ impl BinanceFuturesDataClient {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     async fn fetch_and_emit_snapshot(
         http: BinanceFuturesHttpClient,
         sender: tokio::sync::mpsc::UnboundedSender<DataEvent>,
@@ -415,7 +416,7 @@ impl BinanceFuturesDataClient {
         .await;
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     async fn fetch_and_emit_snapshot_inner(
         http: BinanceFuturesHttpClient,
         sender: tokio::sync::mpsc::UnboundedSender<DataEvent>,
@@ -558,6 +559,7 @@ impl BinanceFuturesDataClient {
                     buffers.rcu(|m| {
                         taken = Vec::new();
                         should_return = false;
+
                         match m.get_mut(&instrument_id) {
                             Some(buffer) if buffer.epoch == epoch => {
                                 taken = std::mem::take(&mut buffer.updates);
@@ -643,6 +645,7 @@ impl BinanceFuturesDataClient {
                         buffers.rcu(|m| {
                             taken = Vec::new();
                             should_break = false;
+
                             match m.get_mut(&instrument_id) {
                                 Some(buffer) if buffer.epoch == epoch => {
                                     if buffer.updates.is_empty() {
@@ -944,6 +947,7 @@ impl DataClient for BinanceFuturesDataClient {
 
         let handle = get_runtime().spawn(async move {
             pin_mut!(stream);
+
             loop {
                 tokio::select! {
                     Some(message) = stream.next() => {
@@ -998,6 +1002,7 @@ impl DataClient for BinanceFuturesDataClient {
                                         .collect();
 
                                     let mut new_statuses = AHashMap::new();
+
                                     for (raw_symbol, action) in &symbol_statuses {
                                         if let Some(&id) = raw_to_id.get(raw_symbol) {
                                             new_statuses.insert(id, *action);

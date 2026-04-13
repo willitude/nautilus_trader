@@ -432,6 +432,7 @@ impl PolymarketDataClient {
                     if ctx.active_quote_subs.contains(&instrument_id) {
                         // Clone and drop guard before emit to avoid DashMap deadlock
                         let last_quote = ctx.last_quotes.get(&instrument_id).map(|r| *r);
+
                         match parse_quote_from_price_change(
                             change,
                             instrument_id,
@@ -466,6 +467,7 @@ impl PolymarketDataClient {
 
                 if ctx.active_trade_subs.contains(&instrument_id) {
                     let ts_init = ctx.clock.get_time_ns();
+
                     match parse_trade_tick(
                         &trade,
                         instrument_id,
@@ -528,6 +530,7 @@ impl PolymarketDataClient {
                 let instruments = ctx.instruments.load();
                 if let Some(existing) = instruments.get(&meta.instrument_id) {
                     let ts_init = ctx.clock.get_time_ns();
+
                     match rebuild_instrument_with_tick_size(
                         existing,
                         &change.new_tick_size,
@@ -756,6 +759,7 @@ impl DataClient for PolymarketDataClient {
         log::debug!("Resetting Polymarket data client: {}", self.client_id);
         self.is_connected.store(false, Ordering::Relaxed);
         self.cancellation_token = CancellationToken::new();
+
         for handle in self.tasks.drain(..) {
             handle.abort();
         }
@@ -784,23 +788,9 @@ impl DataClient for PolymarketDataClient {
 
         self.ws_client.connect().await?;
 
-        // Subscribe all loaded instruments to WS market channel.
-        let token_ids: Vec<String> = self
-            .instruments
-            .load()
-            .values()
-            .map(|inst| inst.raw_symbol().as_str().to_string())
-            .collect();
-
-        if !token_ids.is_empty() || self.config.subscribe_new_markets {
-            log::info!(
-                "Subscribing {} token IDs to WS market channel (subscribe_new_markets={})...",
-                token_ids.len(),
-                self.config.subscribe_new_markets,
-            );
-            self.ws_client.subscribe_market(token_ids).await?;
-        } else {
-            log::info!("No instruments to subscribe (skipped)");
+        if self.config.subscribe_new_markets {
+            log::info!("Subscribing to new markets...");
+            self.ws_client.subscribe_market(vec![]).await?;
         }
 
         let rx = self
@@ -1054,7 +1044,7 @@ impl DataClient for PolymarketDataClient {
     }
 
     fn subscribe_instruments(&mut self, _cmd: &SubscribeInstruments) -> anyhow::Result<()> {
-        log::debug!("subscribe_instruments: Polymarket auto-subscribes via connect");
+        log::debug!("subscribe_instruments: subscribed individually via data subscription methods");
         Ok(())
     }
 

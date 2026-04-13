@@ -78,7 +78,6 @@ impl Debug for BacktestExecutionClient {
 impl BacktestExecutionClient {
     /// Creates a new [`BacktestExecutionClient`] instance.
     #[must_use]
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         trader_id: TraderId,
         account_id: AccountId,
@@ -224,6 +223,7 @@ impl ExecutionClient for BacktestExecutionClient {
 
         // Buffer events for deferred processing
         let mut queued = self.queued_events.borrow_mut();
+
         for order in &orders {
             let event = self.factory.generate_order_submitted(order, ts_init);
             queued.push(event);

@@ -28,7 +28,10 @@ use nautilus_core::{
 };
 use nautilus_model::{
     data::{BarType, Data, OrderBookDeltas_API, QuoteTick},
-    enums::{AggregationSource, BarAggregation, OrderSide, OrderType, PriceType, TimeInForce},
+    enums::{
+        AggregationSource, BarAggregation, OrderSide, OrderType, PriceType, TimeInForce,
+        TriggerType,
+    },
     events::{OrderCancelRejected, OrderModifyRejected, OrderRejected},
     identifiers::{
         AccountId, ClientOrderId, InstrumentId, StrategyId, Symbol, TraderId, VenueOrderId,
@@ -245,7 +248,7 @@ impl BybitWebSocketClient {
 
     /// Disconnects the WebSocket client and stops the background task.
     #[pyo3(name = "connect")]
-    #[allow(clippy::needless_pass_by_value)] // PyO3 extracted parameter
+    #[expect(clippy::needless_pass_by_value)] // PyO3 extracted parameter
     fn py_connect<'py>(
         &mut self,
         py: Python<'py>,
@@ -817,11 +820,12 @@ impl BybitWebSocketClient {
         time_in_force=None,
         price=None,
         trigger_price=None,
+        trigger_type=None,
         post_only=None,
         reduce_only=None,
         is_leverage=false,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_submit_order<'py>(
         &self,
         py: Python<'py>,
@@ -837,6 +841,7 @@ impl BybitWebSocketClient {
         time_in_force: Option<TimeInForce>,
         price: Option<Price>,
         trigger_price: Option<Price>,
+        trigger_type: Option<TriggerType>,
         post_only: Option<bool>,
         reduce_only: Option<bool>,
         is_leverage: bool,
@@ -857,6 +862,7 @@ impl BybitWebSocketClient {
                     time_in_force,
                     price,
                     trigger_price,
+                    trigger_type,
                     post_only,
                     reduce_only,
                     is_leverage,
@@ -890,7 +896,7 @@ impl BybitWebSocketClient {
         quantity=None,
         price=None,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_modify_order<'py>(
         &self,
         py: Python<'py>,
@@ -943,7 +949,7 @@ impl BybitWebSocketClient {
         client_order_id,
         venue_order_id=None,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_cancel_order<'py>(
         &self,
         py: Python<'py>,
@@ -990,13 +996,14 @@ impl BybitWebSocketClient {
         time_in_force=None,
         price=None,
         trigger_price=None,
+        trigger_type=None,
         post_only=None,
         reduce_only=None,
         is_leverage=false,
         take_profit=None,
         stop_loss=None,
     ))]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn py_build_place_order_params(
         &self,
         product_type: BybitProductType,
@@ -1009,6 +1016,7 @@ impl BybitWebSocketClient {
         time_in_force: Option<TimeInForce>,
         price: Option<Price>,
         trigger_price: Option<Price>,
+        trigger_type: Option<TriggerType>,
         post_only: Option<bool>,
         reduce_only: Option<bool>,
         is_leverage: bool,
@@ -1027,6 +1035,7 @@ impl BybitWebSocketClient {
                 time_in_force,
                 price,
                 trigger_price,
+                trigger_type,
                 post_only,
                 reduce_only,
                 is_leverage,
@@ -1075,7 +1084,6 @@ impl BybitWebSocketClient {
 
     /// Builds order params for amending an order.
     #[pyo3(name = "build_amend_order_params")]
-    #[allow(clippy::too_many_arguments)]
     fn py_build_amend_order_params(
         &self,
         product_type: BybitProductType,
@@ -1350,6 +1358,7 @@ fn handle_trade(
     callback: &Py<PyAny>,
 ) {
     let ts_init = clock.get_time_ns();
+
     for trade in &msg.data {
         let Some(instrument) = resolve_instrument(&trade.s, product_type, instruments) else {
             continue;
@@ -1369,7 +1378,7 @@ fn handle_trade(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_kline(
     msg: &crate::websocket::messages::BybitWsKlineMsg,
     product_type: Option<BybitProductType>,
@@ -1392,6 +1401,7 @@ fn handle_kline(
     };
 
     let ts_init = clock.get_time_ns();
+
     for kline in &msg.data {
         if !kline.confirm {
             continue;
@@ -1410,7 +1420,7 @@ fn handle_kline(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_ticker_linear(
     msg: &crate::websocket::messages::BybitWsTickerLinearMsg,
     product_type: Option<BybitProductType>,
@@ -1488,7 +1498,7 @@ fn handle_ticker_linear(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_ticker_option(
     msg: &crate::websocket::messages::BybitWsTickerOptionMsg,
     product_type: Option<BybitProductType>,
@@ -1544,6 +1554,7 @@ fn handle_account_order(
     callback: &Py<PyAny>,
 ) {
     let ts_init = clock.get_time_ns();
+
     for order in &msg.data {
         let symbol = make_bybit_symbol(order.symbol, order.category);
         let Some(instrument) = instruments.get_cloned(&symbol) else {
@@ -1570,6 +1581,7 @@ fn handle_account_execution(
     callback: &Py<PyAny>,
 ) {
     let ts_init = clock.get_time_ns();
+
     for exec in &msg.data {
         let symbol = make_bybit_symbol(exec.symbol, exec.category);
         let Some(instrument) = instruments.get_cloned(&symbol) else {
@@ -1617,6 +1629,7 @@ fn handle_account_position(
     callback: &Py<PyAny>,
 ) {
     let ts_init = clock.get_time_ns();
+
     for position in &msg.data {
         let symbol = make_bybit_symbol(position.symbol, position.category);
         let Some(instrument) = instruments.get_cloned(&symbol) else {

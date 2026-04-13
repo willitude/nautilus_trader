@@ -133,6 +133,7 @@ async fn handle_socket(mut socket: WebSocket, state: TestServerState) {
 
     // Server-side ping loop
     let state_clone = state.clone();
+
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         loop {
@@ -570,6 +571,7 @@ where
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     };
+
     match tokio::time::timeout(timeout, poll).await {
         Ok(events) => events,
         Err(_) => state.subscription_events().await,
@@ -1896,6 +1898,7 @@ mod conditional_order_tests {
                 Some(TimeInForce::Gtc),
                 price,
                 trigger_price,
+                None,  // trigger_type
                 None,  // post_only
                 None,  // reduce_only
                 false, // is_leverage

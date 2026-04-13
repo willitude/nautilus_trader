@@ -79,6 +79,7 @@ use nautilus_core::{
 use nautilus_model::{
     events::OrderEventAny,
     identifiers::{StrategyId, TraderId},
+    orders::Order,
 };
 use nautilus_system::{config::NautilusKernelConfig, kernel::NautilusKernel};
 use nautilus_trading::{ExecutionAlgorithm, strategy::Strategy};
@@ -274,6 +275,8 @@ impl LiveNode {
                 anyhow::bail!("LiveNode cannot be used with Backtest environment");
             }
         }
+
+        config.validate_runtime_support()?;
 
         let runner = AsyncRunner::new();
         runner.bind_senders();
@@ -487,7 +490,7 @@ impl LiveNode {
     /// # Errors
     ///
     /// Returns an error if reconciliation fails or times out.
-    #[allow(clippy::await_holding_refcell_ref)] // Single-threaded runtime, intentional design
+    #[expect(clippy::await_holding_refcell_ref)] // Single-threaded runtime, intentional design
     async fn perform_startup_reconciliation(&mut self) -> anyhow::Result<()> {
         if !self.config.exec_engine.reconciliation {
             log::info!("Startup reconciliation disabled");
@@ -752,6 +755,10 @@ impl LiveNode {
             Duration::from_secs(1) // Unused, timer won't fire
         };
 
+        // `reconciliation_startup_delay_secs` is a post-reconciliation grace period:
+        // startup reconciliation has already completed above, and this delay offsets
+        // the first periodic tick to let the system stabilize before continuous checks
+        // begin. Matches the legacy Python semantics in `LiveExecutionEngine`.
         let startup_delay = if self.config.exec_engine.reconciliation {
             Duration::from_secs_f64(exec_config.reconciliation_startup_delay_secs)
         } else {
@@ -912,22 +919,83 @@ impl LiveNode {
                         residual_events += 1;
                     }
 
-                    if let ExecutionEvent::Order(ref order_evt) = evt {
-                        self.exec_manager.record_local_activity(order_evt.client_order_id());
-                        if let OrderEventAny::Filled(fill) = order_evt {
-                            self.exec_manager.record_position_activity(
-                                fill.instrument_id,
-                                fill.ts_event,
-                            );
+                    let mut maybe_close_id = None;
+
+                    match &evt {
+                        ExecutionEvent::Order(order_evt) => {
+                            self.exec_manager.record_local_activity(order_evt.client_order_id());
+                            match order_evt {
+                                OrderEventAny::Filled(fill) => {
+                                    self.exec_manager.record_position_activity(
+                                        fill.instrument_id,
+                                        fill.ts_event,
+                                    );
+                                    self.exec_manager.mark_fill_processed(fill.trade_id);
+                                }
+                                OrderEventAny::Accepted(_) => {
+                                    self.exec_manager.clear_recon_tracking(
+                                        &order_evt.client_order_id(), true,
+                                    );
+                                }
+                                OrderEventAny::Rejected(_)
+                                | OrderEventAny::Canceled(_)
+                                | OrderEventAny::Expired(_)
+                                | OrderEventAny::Denied(_) => {
+                                    self.exec_manager.clear_recon_tracking(
+                                        &order_evt.client_order_id(), true,
+                                    );
+                                }
+                                _ => {}
+                            }
+                            maybe_close_id = Some(order_evt.client_order_id());
                         }
+                        ExecutionEvent::Report(report) => {
+                            if let ExecutionReport::Fill(fill_report) = report
+                                && self.exec_manager.is_fill_recently_processed(&fill_report.trade_id) {
+                                    log::debug!(
+                                        "Skipping recently processed fill report: {}",
+                                        fill_report.trade_id,
+                                    );
+                                    continue;
+                            }
+                            self.exec_manager.observe_execution_report(report);
+                        }
+                        ExecutionEvent::Account(_) => {}
                     }
 
                     AsyncRunner::handle_exec_event(evt);
+
+                    // Post-dispatch: clear tracking when order closes
+                    if let Some(coid) = maybe_close_id {
+                        let is_closed = self.kernel.cache().borrow()
+                            .order(&coid).is_some_and(|o| o.is_closed());
+                        if is_closed {
+                            self.exec_manager.clear_recon_tracking(&coid, true);
+                        }
+                    }
                 }
                 Some(cmd) = exec_cmd_rx.recv() => {
                     if is_shutting_down {
                         log::debug!("Residual exec command: {cmd:?}");
                         residual_events += 1;
+                    }
+
+                    match &cmd {
+                        TradingCommand::SubmitOrder(submit) => {
+                            self.exec_manager.register_inflight(submit.client_order_id);
+                        }
+                        TradingCommand::SubmitOrderList(submit) => {
+                            for order_init in &submit.order_inits {
+                                self.exec_manager.register_inflight(order_init.client_order_id);
+                            }
+                        }
+                        TradingCommand::ModifyOrder(modify) => {
+                            self.exec_manager.register_inflight(modify.client_order_id);
+                        }
+                        TradingCommand::CancelOrder(cancel) => {
+                            self.exec_manager.register_inflight(cancel.client_order_id);
+                        }
+                        _ => {}
                     }
                     AsyncRunner::handle_exec_command(cmd);
                 }
@@ -973,6 +1041,7 @@ impl LiveNode {
             if let OrderEventAny::Filled(fill) = event {
                 self.exec_manager
                     .record_position_activity(fill.instrument_id, fill.ts_event);
+                self.exec_manager.mark_fill_processed(fill.trade_id);
             }
             self.kernel.exec_engine.borrow_mut().process(event);
         }
@@ -1029,18 +1098,22 @@ impl LiveNode {
             AsyncRunner::handle_time_event(handler);
             drained += 1;
         }
+
         while let Ok(cmd) = data_cmd_rx.try_recv() {
             AsyncRunner::handle_data_command(cmd);
             drained += 1;
         }
+
         while let Ok(evt) = data_evt_rx.try_recv() {
             AsyncRunner::handle_data_event(evt);
             drained += 1;
         }
+
         while let Ok(cmd) = exec_cmd_rx.try_recv() {
             AsyncRunner::handle_exec_command(cmd);
             drained += 1;
         }
+
         while let Ok(evt) = exec_evt_rx.try_recv() {
             AsyncRunner::handle_exec_event(evt);
             drained += 1;
@@ -1254,8 +1327,7 @@ impl LiveNode {
     // get_all_clients() returns references into the engine's client map.
     // This is safe: select! runs one branch to completion, so no other
     // branch can borrow the same RefCells concurrently.
-    #[allow(clippy::await_holding_refcell_ref)]
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::await_holding_refcell_ref)]
     async fn run_reconciliation_checks(
         &mut self,
         inflight_interval_ns: u64,
@@ -1272,8 +1344,11 @@ impl LiveNode {
             if self.state() == NodeState::ShuttingDown {
                 return Ok(());
             }
-            let events = self.exec_manager.check_inflight_orders();
-            self.process_reconciliation_events(&events);
+            let result = self.exec_manager.check_inflight_orders();
+            self.process_reconciliation_events(&result.events);
+            for cmd in result.queries {
+                AsyncRunner::handle_exec_command(cmd);
+            }
             *ts_last_inflight = ts_now;
         }
 

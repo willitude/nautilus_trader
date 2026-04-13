@@ -266,15 +266,10 @@ pub enum BybitInnovationFlag {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum BybitInstrumentStatus {
-    Trading,
-    Settled,
-    Delivering,
-    ListedOnly,
-    PendingListing,
     PreLaunch,
-    PreTrading,
+    Trading,
+    Delivering,
     Closed,
-    Suspended,
     #[serde(other)]
     Other,
 }
@@ -593,6 +588,25 @@ impl From<BybitTriggerType> for TriggerType {
             BybitTriggerType::MarkPrice => Self::MarkPrice,
         }
     }
+}
+
+impl From<TriggerType> for BybitTriggerType {
+    fn from(value: TriggerType) -> Self {
+        match value {
+            TriggerType::Default | TriggerType::LastPrice | TriggerType::NoTrigger => {
+                Self::LastPrice
+            }
+            TriggerType::IndexPrice => Self::IndexPrice,
+            TriggerType::MarkPrice => Self::MarkPrice,
+            _ => Self::LastPrice,
+        }
+    }
+}
+
+/// Resolves an optional Nautilus trigger type to a Bybit trigger type,
+/// defaulting to `LastPrice` when absent.
+pub fn resolve_trigger_type(trigger_type: Option<TriggerType>) -> BybitTriggerType {
+    trigger_type.map_or(BybitTriggerType::LastPrice, BybitTriggerType::from)
 }
 
 /// Order cancel reason values as returned by Bybit.
