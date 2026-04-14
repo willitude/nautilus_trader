@@ -79,25 +79,9 @@ from nautilus_trader.indicators.snapshots import MarketStateConfig
 from nautilus_trader.indicators.snapshots import MarketStateSnapshot
 from nautilus_trader.indicators.snapshots import ReversalScoreSnapshot
 
-try:
-    from nautilus_trader.indicators._cy_reversal_score import (
-        ReversalScore,
-        ReversalScoreConfig,
-    )
-except ImportError:
-    from nautilus_trader.indicators.reversal_score import (
-        ReversalScore,
-        ReversalScoreConfig,
-    )
-
-try:
-    from nautilus_trader.indicators._cy_liquidity_regime import (
-        LiquidityRegimeIndicator,
-    )
-except ImportError:
-    from nautilus_trader.indicators.liquidity_regime import (
-        LiquidityRegimeIndicator,
-    )
+from nautilus_trader.indicators.reversal_score import ReversalScore
+from nautilus_trader.indicators.reversal_score import ReversalScoreConfig
+from nautilus_trader.indicators.liquidity_regime import LiquidityRegimeIndicator
 
 
 __all__ = [
