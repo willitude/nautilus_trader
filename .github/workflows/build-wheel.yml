@@ -5,12 +5,26 @@ on:
 
 jobs:
   build-wheel:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x86_64
+            deps_cmd: |
+              sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+                gcc g++ pkg-config libssl-dev clang
+          - os: macos-14
+            label: macos-arm64
+            deps_cmd: ""
+
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
 
     steps:
-      - name: Free disk space
+      - name: Free disk space (Linux only)
+        if: runner.os == 'Linux'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
             /usr/local/share/boost /usr/share/swift
@@ -27,10 +41,12 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Install build dependencies
+      - name: Install OS-level dependencies
+        if: matrix.deps_cmd != ''
+        run: ${{ matrix.deps_cmd }}
+
+      - name: Install Python build dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-            gcc g++ pkg-config libssl-dev clang
           pip install "setuptools>=82" "poetry-core==2.3.1" \
             "numpy>=1.26.4" "cython==3.2.4" packaging wheel
 
@@ -48,20 +64,60 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Built: $WHL_NAME (v$VERSION)"
 
-      - name: Create GitHub Release
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.label }}
+          path: /tmp/wheels/nautilus_trader-*.whl
+
+  release:
+    needs: build-wheel
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/wheels
+          merge-multiple: true
+
+      - name: Determine version
+        id: version
+        run: |
+          WHL=$(ls /tmp/wheels/nautilus_trader-*.whl | head -1)
+          WHL_NAME=$(basename "$WHL")
+          VERSION=$(echo "$WHL_NAME" | sed -E 's/nautilus_trader-([^-]+)-.*/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Version: $VERSION"
+          echo "Wheels:"
+          ls -lh /tmp/wheels/
+
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="wheel-v${{ steps.wheel_info.outputs.version }}"
+          TAG="wheel-v${{ steps.version.outputs.version }}"
 
           if gh release view "$TAG" > /dev/null 2>&1; then
-            echo "Release $TAG exists, uploading wheel as update"
-            gh release upload "$TAG" "${{ steps.wheel_info.outputs.whl_path }}" --clobber
+            echo "Release $TAG exists — uploading wheels"
+            for whl in /tmp/wheels/nautilus_trader-*.whl; do
+              gh release upload "$TAG" "$whl" --clobber
+            done
           else
             gh release create "$TAG" \
-              --title "nautilus_trader ${{ steps.wheel_info.outputs.version }} (linux x86_64)" \
-              --notes "Pre-built wheel for linux x86_64, Python 3.12.
+              --title "nautilus_trader ${{ steps.version.outputs.version }}" \
+              --notes "Pre-built wheels for Python 3.12.
+
+          | Platform | Arch |
+          |----------|------|
+          | Linux    | x86_64 |
+          | macOS    | arm64  |
+
           Commit: ${{ github.sha }}" \
-              "${{ steps.wheel_info.outputs.whl_path }}"
+              /tmp/wheels/nautilus_trader-*.whl
           fi
           echo "Release: $TAG"

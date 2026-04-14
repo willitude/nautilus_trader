@@ -69,9 +69,50 @@ from nautilus_trader.indicators.volume import OnBalanceVolume
 from nautilus_trader.indicators.volume import Pressure
 from nautilus_trader.indicators.volume import VolumeWeightedAveragePrice
 
+# Microstructure indicators (willitude extensions)
+from nautilus_trader.indicators.basis_momentum import BasisMomentumConfig
+from nautilus_trader.indicators.basis_momentum import BasisMomentumIndicator
+from nautilus_trader.indicators.market_state import MarketStateIndicator
+from nautilus_trader.indicators.snapshots import BasisMomentumSnapshot
+from nautilus_trader.indicators.snapshots import LiquidityRegime
+from nautilus_trader.indicators.snapshots import MarketStateConfig
+from nautilus_trader.indicators.snapshots import MarketStateSnapshot
+from nautilus_trader.indicators.snapshots import ReversalScoreSnapshot
+
+try:
+    from nautilus_trader.indicators._cy_reversal_score import (
+        ReversalScore,
+        ReversalScoreConfig,
+    )
+except ImportError:
+    from nautilus_trader.indicators.reversal_score import (
+        ReversalScore,
+        ReversalScoreConfig,
+    )
+
+try:
+    from nautilus_trader.indicators._cy_liquidity_regime import (
+        LiquidityRegimeIndicator,
+    )
+except ImportError:
+    from nautilus_trader.indicators.liquidity_regime import (
+        LiquidityRegimeIndicator,
+    )
+
 
 __all__ = [
     "AdaptiveMovingAverage",
+    "BasisMomentumConfig",
+    "BasisMomentumIndicator",
+    "BasisMomentumSnapshot",
+    "LiquidityRegime",
+    "LiquidityRegimeIndicator",
+    "MarketStateConfig",
+    "MarketStateIndicator",
+    "MarketStateSnapshot",
+    "ReversalScore",
+    "ReversalScoreConfig",
+    "ReversalScoreSnapshot",
     "ArcherMovingAveragesTrends",
     "AroonOscillator",
     "AverageTrueRange",
